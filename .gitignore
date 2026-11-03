@@ -1,0 +1,48 @@
+# Local working notes / scratch — never committed
+.scratch/
+
+# Documentation — kept local for now
+docs/
+
+# Terraform
+.terraform/
+# Lambda build artifacts (packaged in CI before apply)
+terraform/build/
+# Dependency lock is generated fresh by the Terraform CI; ignored here because
+# local OpenTofu produces an opentofu-registry lock that the CI would reject.
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+
+# Secrets / credentials
+*.pem
+*.key
+.env
+.env.*
+
+# Build artifacts
+__pycache__/
+*.pyc
+dist/
+build/
+node_modules/
+
+# Python tooling
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+
+# OS
+.DS_Store
+
+# Playwright MCP artifacts
+.playwright-mcp/
+
+.vs/
+.history/

@@ -1,0 +1,10 @@
+{
+  "apiEndpoint": "",
+  "cognito": {
+    "authority": "",
+    "clientId": "",
+    "redirectUri": "",
+    "scope": "openid email profile"
+  },
+  "mock": true
+}

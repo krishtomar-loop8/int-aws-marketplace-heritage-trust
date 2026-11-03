@@ -1,0 +1,132 @@
+name: terraform
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch: # allow manual apply (e.g. to toggle AB_RUNNER_ENABLED)
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  terraform:
+    name: terraform
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    env:
+      # Entra SAML federation metadata URL (#23). Empty until the Entra app
+      # exists; set the SAML_METADATA_URL repo variable to switch on the IdP.
+      TF_VAR_saml_metadata_url: ${{ vars.SAML_METADATA_URL }}
+      # Temporary A/B model-measurement Lambda. Defaults off; set the
+      # AB_RUNNER_ENABLED repo variable to "true" to deploy it for a test run,
+      # then back to "false" to remove it.
+      TF_VAR_ab_runner_enabled: ${{ vars.AB_RUNNER_ENABLED || 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-terraform-${{ github.run_id }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: latest
+
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+
+      - name: Build Lambda package
+        # Package the Lambdas (app code + runtime deps) so archive_file has a
+        # build dir at plan/apply time. boto3 is provided by the runtime. The
+        # rest are vendored here: requests (connectors), python-docx + fpdf2
+        # (D5 quarterly-report rendering), openpyxl (D6 AML export Excel writer),
+        # and rapidfuzz + reportlab (Sanction Screener matching + Certificate of
+        # Search PDF). python-docx/rapidfuzz/reportlab pull native code, so wheels
+        # are pinned to the Lambda's platform/ABI (manylinux2014, cp313) —
+        # otherwise the runner's own Python ABI would be baked in and fail to
+        # import on Lambda. Tests and dist-info are excluded.
+        run: |
+          set -e
+          rm -rf build/lambda && mkdir -p build/lambda
+          cp -r ../backend ../services build/lambda/
+          # tzdata: IANA zone data for zoneinfo — the matter-search dossier renders
+          # dates in America/Vancouver and the Lambda runtime ships no system tzdb.
+          python3 -m pip install requests python-docx fpdf2 openpyxl rapidfuzz reportlab tzdata \
+            --platform manylinux2014_x86_64 --implementation cp --python-version 3.13 \
+            --only-binary=:all: --target build/lambda --quiet
+          find build/lambda -type d -name '__pycache__' -prune -exec rm -rf {} +
+          find build/lambda -type d -name 'tests' -prune -exec rm -rf {} +
+          find build/lambda -type d -name '*.dist-info' -prune -exec rm -rf {} +
+
+      - name: Format check
+        run: terraform fmt -check -recursive -diff
+
+      - name: Init
+        run: terraform init -input=false
+
+      - name: Validate
+        run: terraform validate
+
+      - name: TFLint
+        run: |
+          tflint --init
+          tflint
+
+      - name: Plan
+        # -lock=false: PR plans don't write state, so they must not contend for
+        # the S3 native state lock (concurrent PR plans would otherwise race).
+        # Apply (below) still acquires the lock.
+        run: terraform plan -input=false -lock=false -out=tfplan
+
+      - name: Apply
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: terraform apply -input=false -auto-approve tfplan
+
+      - name: Set up Node
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build & deploy SPA
+        # After apply, build the SPA, write config.json from live Terraform
+        # outputs, sync to the S3 origin, and invalidate CloudFront.
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          set -e
+          BUCKET=$(terraform output -raw web_bucket)
+          DIST_ID=$(terraform output -raw cloudfront_distribution_id)
+          API=$(terraform output -raw search_api_endpoint)
+          WEB_URL=$(terraform output -raw web_url)
+          AUTH=$(terraform output -raw cognito_authority)
+          CLIENT=$(terraform output -raw cognito_app_client_id)
+          cd ../frontend
+          npm ci
+          npm run build
+          cat > dist/config.json <<JSON
+          {"apiEndpoint":"${API%/}","cognito":{"authority":"$AUTH","clientId":"$CLIENT","redirectUri":"$WEB_URL/","scope":"openid email profile"},"mock":false}
+          JSON
+          # Cache policy: the hashed /assets/* bundles are content-addressed, so cache
+          # them forever (immutable). index.html and the runtime config.json are NOT
+          # hashed and gate which bundle/config loads, so they must always revalidate
+          # (no-cache) — otherwise the browser keeps an old index.html and never picks
+          # up a new deploy until a hard refresh (a CloudFront invalidation flushes the
+          # edge but can't reach an already-cached browser copy).
+          aws s3 sync dist/ "s3://$BUCKET/" --delete \
+            --cache-control "public,max-age=31536000,immutable" \
+            --exclude index.html --exclude config.json
+          aws s3 cp dist/index.html "s3://$BUCKET/index.html" --cache-control "no-cache"
+          aws s3 cp dist/config.json "s3://$BUCKET/config.json" --cache-control "no-cache"
+          aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths "/index.html" "/config.json" "/"

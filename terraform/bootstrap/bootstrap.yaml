@@ -1,0 +1,194 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Aphrodite - one-time bootstrap. Creates the Terraform remote-state S3 bucket
+  (S3 native locking, no DynamoDB), the GitHub Actions OIDC provider, and a
+  single IAM deploy role assumed by GitHub Actions via OIDC. Apply once via
+  assisted AWS CLI; outputs feed the Terraform backend + repo variables.
+
+Parameters:
+  GitHubOrg:
+    Type: String
+    Description: GitHub organization that owns the repo.
+  GitHubRepo:
+    Type: String
+    Description: GitHub repository name allowed to assume the deploy role.
+
+Resources:
+  # --- Terraform remote state bucket (S3 native locking; no DynamoDB) ---
+  TerraformStateBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "aphrodite-tfstate-${AWS::AccountId}-${AWS::Region}"
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-noncurrent-state-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 90
+      Tags:
+        - Key: Project
+          Value: aphrodite
+        - Key: ManagedBy
+          Value: cloudformation-bootstrap
+
+  TerraformStateBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref TerraformStateBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt TerraformStateBucket.Arn
+              - !Sub "${TerraformStateBucket.Arn}/*"
+            Condition:
+              Bool:
+                "aws:SecureTransport": "false"
+
+  # --- GitHub Actions OIDC provider ---
+  # Thumbprints are no longer enforced by AWS (GitHub's CA is trusted), but the
+  # CloudFormation resource still requires the property; both known values are listed.
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
+      Tags:
+        - Key: Project
+          Value: aphrodite
+
+  # --- IAM deploy role assumed by GitHub Actions ---
+  TerraformDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: aphrodite-gha-terraform-deploy
+      Description: Assumed by GitHub Actions (OIDC) to run Terraform plan/apply.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubOIDCProvider
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                "token.actions.githubusercontent.com:aud": sts.amazonaws.com
+              StringLike:
+                "token.actions.githubusercontent.com:sub": !Sub "repo:${GitHubOrg}/${GitHubRepo}:*"
+      # Curated inline policy (no broad AWS-managed policy — the account guardrail
+      # denies attaching PowerUserAccess). Enumerates only the services Terraform
+      # manages. IAM is scoped to the /aphrodite/ path below.
+      Policies:
+        - PolicyName: terraform-deploy-services
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ServicesManagedByTerraform
+                Effect: Allow
+                Action:
+                  - "s3:*"
+                  - "s3vectors:*"
+                  - "bedrock:*"
+                  - "kms:*"
+                  - "secretsmanager:*"
+                  - "logs:*"
+                  - "cloudtrail:*"
+                  - "lambda:*"
+                  - "apigateway:*"
+                  - "dynamodb:*"
+                  - "cognito-idp:*"
+                  - "cognito-identity:*"
+                  - "events:*"
+                  - "scheduler:*"
+                  - "sns:*"
+                  - "cloudfront:*"
+                  - "acm:*"
+                  - "cloudwatch:*"
+                  - "sts:GetCallerIdentity"
+                  - "tag:GetResources"
+                  - "tag:TagResources"
+                  - "tag:UntagResources"
+                Resource: "*"
+        - PolicyName: terraform-iam-scoped
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ManageProjectScopedIamResources
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:UpdateRole
+                  - iam:UpdateRoleDescription
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:CreatePolicy
+                  - iam:DeletePolicy
+                  - iam:CreatePolicyVersion
+                  - iam:DeletePolicyVersion
+                  - iam:TagPolicy
+                  - iam:UntagPolicy
+                  - iam:PassRole
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/aphrodite/*"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:policy/aphrodite/*"
+              - Sid: ReadIamForTerraformPlan
+                Effect: Allow
+                Action:
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:GetPolicy
+                  - iam:GetPolicyVersion
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListPolicyVersions
+                  - iam:ListInstanceProfilesForRole
+                  - iam:CreateServiceLinkedRole
+                Resource: "*"
+      Tags:
+        - Key: Project
+          Value: aphrodite
+
+Outputs:
+  StateBucketName:
+    Description: S3 bucket for Terraform remote state (set as TF_STATE_BUCKET).
+    Value: !Ref TerraformStateBucket
+  DeployRoleArn:
+    Description: IAM role ARN for GitHub Actions OIDC (set as AWS_DEPLOY_ROLE_ARN).
+    Value: !GetAtt TerraformDeployRole.Arn
+  OIDCProviderArn:
+    Description: GitHub Actions OIDC provider ARN.
+    Value: !Ref GitHubOIDCProvider
+  Region:
+    Description: Region the bootstrap was deployed to (set as AWS_REGION).
+    Value: !Ref AWS::Region

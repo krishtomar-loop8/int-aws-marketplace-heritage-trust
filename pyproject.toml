@@ -1,0 +1,60 @@
+[project]
+name = "aphrodite-frontier"
+version = "0.1.0"
+description = "Aphrodite - read-only source connectors and AWS Lambda backend."
+requires-python = ">=3.12"
+dependencies = [
+    # Quarterly Report Draft Generator (D5) document rendering. python-docx
+    # produces the cover letter (.docx); fpdf2 (pure-Python) the trust ledger
+    # (.pdf). Vendored into the Lambda zip by the CI build with platform-pinned
+    # wheels (python-docx pulls native lxml).
+    "python-docx",
+    "fpdf2",
+    # Monthly AML Name Export (D6) — openpyxl writes the formatted Excel workbook.
+    "openpyxl",
+    # Sanction Screener — RapidFuzz (C-backed fuzzy matching) + ReportLab
+    # (Certificate of Search PDF). Both ship manylinux cp313 wheels, so the CI
+    # build vendors them into the Lambda zip like the other native deps.
+    "rapidfuzz",
+    "reportlab",
+    # Matter search renders dossier dates in America/Vancouver; the Lambda
+    # runtime has no system IANA tz database, so zoneinfo needs this fallback.
+    "tzdata",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "pytest",
+    "boto3",
+    "requests",
+    "responses",
+    # pandas builds the in-memory .xlsx fixtures in the ported screener tests
+    # (dev/test only — never vendored into the Lambda package).
+    "pandas",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+# Vendored verbatim from the inherited WorkSmarter tool — kept close to source
+# (their own tests cover them) so upstream diffs stay legible. Our integration
+# code (screening.py, api/screener.py, the refresh Lambda) is linted normally.
+extend-exclude = [
+    "backend/screener/matcher.py",
+    "backend/screener/preprocessor.py",
+    "backend/screener/fetcher.py",
+    "backend/screener/reporting.py",
+    "backend/screener/tests/test_matcher.py",
+    "backend/screener/tests/test_preprocessor.py",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["backend", "services"]
+addopts = "-q"
+
+[tool.setuptools]
+packages = ["backend", "services"]
