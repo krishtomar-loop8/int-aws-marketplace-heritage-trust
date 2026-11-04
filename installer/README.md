@@ -139,14 +139,27 @@ example a stack created against a state bucket kept from an earlier install, or 
 by a build that was stopped partway). The installer will not guess which release to destroy
 with, so the delete fails and nothing is removed.
 
-1. Preferred: update the stack to set `AphroditeVersion` and `BundleSha256` to the release
-   that was deployed (the zip must still be in the artifact bucket), then delete the stack
-   again.
-2. If that is impossible: unzip that release locally with matching Terraform, run
-   `terraform init` against the state bucket (`-backend-config="bucket=<StateBucket>"
+A failed delete leaves the stack in `DELETE_FAILED`, where `update-stack` is not allowed. So
+the fix depends on whether you have already tried to delete.
+
+**(a) Before deleting** (you see an empty `AphroditeVersion` but resources exist): update the
+stack to set `AphroditeVersion` and `BundleSha256` to the release last deployed (its zip must
+still be in the artifact bucket), then delete the stack. Nothing else is needed.
+
+**(b) The delete already failed** (stack is `DELETE_FAILED`):
+
+1. Tear down manually. Unzip the deployed release locally and run `terraform init` against
+   the state bucket (`-backend-config="bucket=<StateBucket>"
    -backend-config="key=aphrodite/terraform.tfstate" -backend-config="region=<region>"`),
-   and `terraform destroy` with credentials for the buyer's account. Then delete the stack.
-   Empty any non-Object-Lock S3 buckets first; they are not force-destroyed.
+   using the bundled `bin/terraform`, then `terraform destroy` with credentials for the
+   buyer's account. Empty any non-Object-Lock S3 buckets first; they are not force-destroyed.
+   Object-Lock-held versions are never bypassed.
+2. Retry the delete skipping the custom resource:
+   `aws cloudformation delete-stack --stack-name STACK --region REGION --retain-resources Deployment`.
+   This is required, not optional: `terraform destroy` leaves an empty
+   `aphrodite/terraform.tfstate` object in the state bucket, so the installer would still see
+   "state exists" with an empty version and fail the same way. (Deleting that object would
+   also work, but retaining `Deployment` avoids touching state.)
 
 ## Unlock a stale Terraform lock
 
@@ -162,7 +175,9 @@ aws codebuild start-build --project-name PROJECT --region ca-central-1 \
     name=BUNDLE_SHA256,value=SHA,type=PLAINTEXT
 ```
 
-`PROJECT` is the `DeployProject` physical name (CodeBuild console). `VERSION` and
+Find `PROJECT` with
+`aws cloudformation describe-stack-resource --stack-name STACK --region REGION --logical-resource-id DeployProject --query StackResourceDetail.PhysicalResourceId --output text`.
+`VERSION` and
 `BUNDLE_SHA256` must be those of an uploaded release, since the build downloads and verifies
 the bundle first. Confirm no other build is running before unlocking.
 
@@ -171,10 +186,11 @@ the bundle first. Confirm no other build is running before unlocking.
 Out of automation in v1. The kept resources clash by name with a fresh install, so they must
 be imported into Terraform state before the first apply. Loop8-assisted:
 
-1. Read `s3://<StateBucket>/retained-resources.json` (address, id, arn, bucket, name).
+1. Read `retained-resources.json` (address, id, arn, bucket, name) from the OLD, retained
+   state bucket of the uninstalled stack: `s3://<OldStateBucket>/retained-resources.json`.
 2. Create a new stack and run steps 1 and 2 of Install, but **do not** do step 3 yet.
-3. Using the release bundle and a Terraform backend pointing at the same `StateBucket`
-   (init as in Manual teardown), run `terraform import <address> <id>` for each address in
+3. Using the release bundle and a Terraform backend pointing at the NEW stack's
+   `StateBucket` (init as in Manual teardown, with the new bucket name), run `terraform import <address> <id>` for each address in
    `installer/retained-addresses.txt` (use the recorded `id`, which is the bucket or table
    name, or the KMS key ID; aliases import by `alias/<name>`). Then `terraform plan` and
    confirm it proposes no replacement of those resources.
