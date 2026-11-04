@@ -1,0 +1,527 @@
+name: Installer E2E (sandbox)
+
+# Manually dispatched. Exercises the CloudFormation installer (installer/installer.yaml) against
+# published GitHub Release assets in a SANDBOX AWS account over GitHub OIDC. This workflow is the
+# only thing that deploys; nothing here touches a Loop8 account.
+#
+# Requires GitHub Environment `sandbox` with vars AWS_E2E_ROLE_ARN (OIDC role; its
+# MaxSessionDuration must be >= 3h) and AWS_REGION.
+#
+# The installer's resources have account-fixed names (aphrodite-outputs-<account>, ...), so only
+# one scenario can run per account at a time, and the account must be clean at the start. A
+# precheck fails fast if leftovers (e.g. from uninstall-keep) exist.
+
+on:
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: "Scenario to run"
+        type: choice
+        required: true
+        options:
+          - install
+          - upgrade
+          - broken-upgrade
+          - failed-first-deploy
+          - uninstall-keep
+          - uninstall-delete
+          - bad-inputs
+          - bedrock-off
+      version_a:
+        description: "Release version A, e.g. 1.2.3 (no leading v)"
+        type: string
+        required: true
+      version_b:
+        description: "Release version B (upgrade, broken-upgrade only)"
+        type: string
+        required: false
+        default: ""
+      region:
+        description: "Override region (bedrock-off: a region without model access). Empty = vars.AWS_REGION"
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: installer-e2e-sandbox
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    name: ${{ inputs.scenario }}
+    runs-on: ubuntu-latest
+    environment: sandbox
+    timeout-minutes: 240
+    env:
+      SCENARIO: ${{ inputs.scenario }}
+      VERSION_A: ${{ inputs.version_a }}
+      VERSION_B: ${{ inputs.version_b }}
+      AWS_REGION: ${{ inputs.region || vars.AWS_REGION }}
+      AWS_DEFAULT_REGION: ${{ inputs.region || vars.AWS_REGION }}
+      STACK: aphrodite-e2e-${{ github.run_id }}
+      GH_TOKEN: ${{ github.token }}
+      PLAYWRIGHT_VERSION: "1.49.1"
+    steps:
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+          semver='^[0-9]+\.[0-9]+\.[0-9]+$'
+          [[ $VERSION_A =~ $semver ]] || { echo "::error::version_a must look like 1.2.3"; exit 1; }
+          case "$SCENARIO" in
+            upgrade|broken-upgrade)
+              [[ $VERSION_B =~ $semver ]] || { echo "::error::version_b is required for $SCENARIO"; exit 1; }
+              ;;
+          esac
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_E2E_ROLE_ARN }}
+          aws-region: ${{ inputs.region || vars.AWS_REGION }}
+          role-duration-seconds: 10800
+
+      - name: Shared helpers
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/lib.sh" <<'LIB'
+          # Sourced by every later step. Expects SCENARIO, STACK, VERSION_A/B, AWS_REGION in env.
+          set -euo pipefail
+          REL_DIR="$RUNNER_TEMP/rel"
+
+          log() { echo "$*" >&2; }
+          fail() { echo "::error::$*"; exit 1; }
+          summary() { printf '%s\n' "$*" >> "$GITHUB_STEP_SUMMARY"; }
+
+          # timed NAME CMD... : run a command (errexit stays effective inside it) and add a timing row
+          # to the job summary. If the command aborts the script, the EXIT trap records the row as FAILED.
+          _pending=""
+          _start=0
+          _on_exit() {
+            if [[ -n $_pending ]]; then summary "| $_pending | $((SECONDS - _start))s | FAILED |"; fi
+          }
+          trap _on_exit EXIT
+          timed() {
+            _pending=$1
+            _start=$SECONDS
+            shift
+            echo "::group::$_pending"
+            "$@"
+            echo "::endgroup::"
+            summary "| $_pending | $((SECONDS - _start))s | ok |"
+            _pending=""
+          }
+
+          assert_eq() { [[ $1 == "$2" ]] || fail "$3: expected '$2', got '$1'"; log "ok: $3 == $2"; }
+          assert_contains() {
+            [[ $1 == *"$2"* ]] || fail "$3: expected to contain '$2', got: $1"
+            log "ok: $3 contains '$2'"
+          }
+
+          account_id() { aws sts get-caller-identity --query Account --output text; }
+
+          # --- stack helpers (all describe calls use STACK_ID so they also work after deletion) ---
+          stack_status() { aws cloudformation describe-stacks --stack-name "$STACK_ID" --query 'Stacks[0].StackStatus' --output text; }
+          stack_output() {
+            aws cloudformation describe-stacks --stack-name "$STACK_ID" \
+              --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue | [0]" --output text
+          }
+          stack_param() {
+            aws cloudformation describe-stacks --stack-name "$STACK_ID" \
+              --query "Stacks[0].Parameters[?ParameterKey=='$1'].ParameterValue | [0]" --output text
+          }
+
+          # settle : poll until the stack leaves *_IN_PROGRESS; print the final status.
+          settle() {
+            local s i
+            for ((i = 0; i < 240; i++)); do
+              s=$(stack_status)
+              if [[ $s != *_IN_PROGRESS ]]; then echo "$s"; return 0; fi
+              sleep 30
+            done
+            echo TIMEOUT
+            return 1
+          }
+
+          # failure_reason EVENT_STATUS : newest reason on logical id Deployment with that status.
+          failure_reason() {
+            aws cloudformation describe-stack-events --stack-name "$STACK_ID" \
+              --query "StackEvents[?LogicalResourceId=='Deployment' && ResourceStatus=='$1'].ResourceStatusReason | [0]" \
+              --output text
+          }
+
+          # wait_ok create|update|delete : the stock waiter; on failure show the Deployment reason.
+          wait_ok() {
+            if ! aws cloudformation wait "stack-$1-complete" --stack-name "$STACK_ID"; then
+              log "stack status: $(stack_status)"
+              log "Deployment reason: $(failure_reason "${2:-UPDATE_FAILED}")"
+              return 1
+            fi
+          }
+
+          fetch_release() { # VERSION
+            local v=$1 dir="$REL_DIR/$1"
+            mkdir -p "$dir"
+            gh release download "v$v" --repo "$GITHUB_REPOSITORY" --dir "$dir" --clobber \
+              -p installer.yaml -p "aphrodite-$v.zip" -p "aphrodite-$v.zip.sha256"
+            ls -l "$dir"
+          }
+          sha_of() { cut -d' ' -f1 "$REL_DIR/$1/aphrodite-$1.zip.sha256"; }
+          ZEROS=0000000000000000000000000000000000000000000000000000000000000000
+
+          # Step 1 of the runbook: create with an empty version.
+          create_stack() { # VERSION_FOR_TEMPLATE
+            STACK_ID=$(aws cloudformation create-stack --stack-name "$STACK" \
+              --template-body "file://$REL_DIR/$1/installer.yaml" --capabilities CAPABILITY_IAM \
+              --parameters ParameterKey=AphroditeVersion,ParameterValue="" \
+              --query StackId --output text)
+            export STACK_ID
+            echo "STACK_ID=$STACK_ID" >> "$GITHUB_ENV"
+            wait_ok create CREATE_FAILED
+            STATE_BUCKET=$(aws cloudformation describe-stack-resource --stack-name "$STACK_ID" \
+              --logical-resource-id StateBucket --query StackResourceDetail.PhysicalResourceId --output text)
+            ARTIFACT_BUCKET=$(stack_output ArtifactBucketName)
+            export STATE_BUCKET ARTIFACT_BUCKET
+            { echo "STATE_BUCKET=$STATE_BUCKET"; echo "ARTIFACT_BUCKET=$ARTIFACT_BUCKET"; } >> "$GITHUB_ENV"
+            log "state bucket $STATE_BUCKET, artifact bucket $ARTIFACT_BUCKET"
+          }
+
+          # Step 2: upload the zip to releases/<v>/aphrodite-<v>.zip.
+          upload_zip() { # VERSION
+            aws s3 cp --only-show-errors "$REL_DIR/$1/aphrodite-$1.zip" \
+              "s3://$ARTIFACT_BUCKET/releases/$1/aphrodite-$1.zip"
+          }
+
+          # update_stack VERSION SHA DELETEDATA : "=" keeps the previous value.
+          update_stack() {
+            local keys=(AphroditeVersion BundleSha256 DeleteData) vals=("$1" "$2" "$3") args=() i
+            for i in 0 1 2; do
+              if [[ ${vals[i]} == = ]]; then
+                args+=("ParameterKey=${keys[i]},UsePreviousValue=true")
+              else
+                args+=("ParameterKey=${keys[i]},ParameterValue=${vals[i]}")
+              fi
+            done
+            args+=(ParameterKey=Environment,UsePreviousValue=true ParameterKey=SamlMetadataUrl,UsePreviousValue=true)
+            aws cloudformation update-stack --stack-name "$STACK_ID" --use-previous-template \
+              --capabilities CAPABILITY_IAM --parameters "${args[@]}" > /dev/null
+          }
+
+          delete_stack() {
+            aws cloudformation delete-stack --stack-name "$STACK_ID"
+            wait_ok delete DELETE_FAILED
+          }
+
+          # Step 3: update with version + checksum and wait for success.
+          deploy_version() { # VERSION [SHA]
+            update_stack "$1" "${2:-$(sha_of "$1")}" =
+            wait_ok update UPDATE_FAILED
+          }
+
+          # expect_update_failure SUBSTRING : update must roll back with that reason.
+          expect_update_failure() {
+            local final reason
+            final=$(settle)
+            assert_eq "$final" UPDATE_ROLLBACK_COMPLETE "stack status after failed update"
+            reason=$(failure_reason UPDATE_FAILED)
+            log "reason: $reason"
+            assert_contains "$reason" "$1" "Deployment UPDATE_FAILED reason"
+          }
+
+          # The full happy path to a deployed version.
+          install_version() { # VERSION
+            timed "download release assets v$1" fetch_release "$1"
+            timed "create stack (empty version)" create_stack "$1"
+            timed "upload zip $1" upload_zip "$1"
+            timed "update stack to $1 (build)" deploy_version "$1"
+          }
+
+          # --- S3 helpers ---
+          bucket_exists() { aws s3api head-bucket --bucket "$1" 2> /dev/null; }
+          table_exists() { aws dynamodb describe-table --table-name "$1" > /dev/null 2>&1; }
+
+          # purge_bucket BUCKET : delete all versions and markers, then the bucket (no Object Lock here).
+          purge_bucket() {
+            local b=$1 payload n
+            bucket_exists "$b" || return 0
+            payload=$(mktemp)
+            while :; do
+              aws s3api list-object-versions --bucket "$b" --output json \
+                | jq -c '{Objects: ([.Versions[]?, .DeleteMarkers[]?] | map({Key, VersionId}) | .[:1000]), Quiet: true}' > "$payload"
+              n=$(jq '.Objects | length' "$payload")
+              [[ $n -gt 0 ]] || break
+              aws s3api delete-objects --bucket "$b" --delete "file://$payload" > /dev/null
+            done
+            aws s3api delete-bucket --bucket "$b"
+            log "removed bucket $b"
+          }
+
+          # retained_json : print retained-resources.json from the state bucket ('{"resources":[]}' if absent).
+          retained_json() {
+            aws s3 cp --only-show-errors "s3://$STATE_BUCKET/retained-resources.json" - 2> /dev/null \
+              || echo '{"resources":[]}'
+          }
+
+          # dump_events : stack events (newest first, capped) into the job summary.
+          dump_events() {
+            [[ -n ${STACK_ID:-} ]] || return 0
+            summary ""
+            summary "### Stack events ($STACK)"
+            summary ""
+            summary "| Time | Logical id | Status | Reason |"
+            summary "|---|---|---|---|"
+            aws cloudformation describe-stack-events --stack-name "$STACK_ID" --output json \
+              --query 'StackEvents[].[Timestamp,LogicalResourceId,ResourceStatus,ResourceStatusReason]' \
+              | jq -r '.[:80][] | "| \(.[0]) | \(.[1]) | \(.[2]) | \((.[3] // "") | gsub("\\|"; "/") | .[:300]) |"' \
+              >> "$GITHUB_STEP_SUMMARY"
+          }
+          LIB
+          {
+            echo "## Installer E2E: $SCENARIO"
+            echo ""
+            echo "Stack \`$STACK\`, region \`$AWS_REGION\`, version A \`$VERSION_A\`, version B \`${VERSION_B:-n/a}\`"
+            echo ""
+            echo "| Step | Duration | Result |"
+            echo "|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Sandbox clean precheck
+        run: |
+          set -euo pipefail
+          source "$RUNNER_TEMP/lib.sh"
+          acct=$(account_id)
+          dirty=0
+          for b in "aphrodite-outputs-$acct" "aphrodite-cloudtrail-$acct-$AWS_REGION"; do
+            if bucket_exists "$b"; then echo "::error::leftover bucket $b (earlier uninstall-keep or locked outputs?)"; dirty=1; fi
+          done
+          for t in aphrodite-activity-log aphrodite-search-jobs; do
+            if table_exists "$t"; then echo "::error::leftover DynamoDB table $t"; dirty=1; fi
+          done
+          [[ $dirty -eq 0 ]] || { echo "Clean the sandbox account/region first."; exit 1; }
+          echo "Sandbox is clean in account $acct, region $AWS_REGION."
+
+      # ---------------------------------------------------------------- install
+      - name: "Scenario: install"
+        if: inputs.scenario == 'install'
+        run: |
+          set -euo pipefail
+          source "$RUNNER_TEMP/lib.sh"
+          install_version "$VERSION_A"
+
+          assert_eq "$(stack_status)" UPDATE_COMPLETE "stack status"
+          assert_eq "$(stack_output DeployedVersion)" "$VERSION_A" "DeployedVersion"
+          app_url=$(stack_output AppUrl)
+          app_url=${app_url%/}
+          log "AppUrl: $app_url"
+
+          # config.json check. The API endpoint is not a stack output, so look it up by its
+          # fixed Terraform name (aphrodite-search); one HTTP API of that name exists in a clean sandbox.
+          check_config() {
+            local cfg api
+            cfg=$(curl -fsS --retry 10 --retry-delay 10 --retry-all-errors "$app_url/config.json" | jq -r .apiEndpoint)
+            api=$(aws apigatewayv2 get-apis --query "Items[?Name=='aphrodite-search'].ApiEndpoint | [0]" --output text)
+            [[ -n $cfg && $cfg != null ]] || fail "config.json has no apiEndpoint"
+            assert_eq "${cfg%/}" "${api%/}" "config.json apiEndpoint vs API Gateway endpoint"
+          }
+          timed "config.json apiEndpoint matches API" check_config
+
+          # Playwright: the app must redirect an anonymous visitor to Cognito sign-in.
+          pw_dir="$RUNNER_TEMP/pw"
+          mkdir -p "$pw_dir"
+          cat > "$pw_dir/signin.mjs" <<'JS'
+          import { chromium } from "playwright";
+          const browser = await chromium.launch();
+          const page = await browser.newPage();
+          await page.goto(process.env.APP_URL, { waitUntil: "load" });
+          try {
+            await page.waitForURL(/amazoncognito\.com|cognito-idp\.|\/oauth2\/authorize/, { timeout: 30000 });
+          } catch (e) {
+            console.error("no Cognito redirect; stuck at", page.url());
+            await browser.close();
+            process.exit(1);
+          }
+          console.log("redirected to Cognito:", page.url());
+          await browser.close();
+          JS
+          timed "install Playwright chromium" bash -c "cd '$pw_dir' && npm init -y > /dev/null && npm i --silent playwright@$PLAYWRIGHT_VERSION && npx -y playwright@$PLAYWRIGHT_VERSION install --with-deps chromium"
+          timed "Playwright: Cognito sign-in redirect" bash -c "cd '$pw_dir' && APP_URL='$app_url' node signin.mjs"
+
+      # ---------------------------------------------------------------- upgrade
+      - name: "Scenario: upgrade"
+        if: inputs.scenario == 'upgrade'
+        run: |
+          set -euo pipefail
+          source "$RUNNER_TEMP/lib.sh"
+          install_version "$VERSION_A"
+          assert_eq "$(stack_output DeployedVersion)" "$VERSION_A" "DeployedVersion after install"
+          timed "download release assets v$VERSION_B" fetch_release "$VERSION_B"
+          timed "upload zip $VERSION_B" upload_zip "$VERSION_B"
+          timed "update stack to $VERSION_B (build)" deploy_version "$VERSION_B"
+          assert_eq "$(stack_output DeployedVersion)" "$VERSION_B" "DeployedVersion after upgrade"
+
+      # ---------------------------------------------------------------- broken-upgrade
+      - name: "Scenario: broken-upgrade"
+        if: inputs.scenario == 'broken-upgrade'
+        run: |
+          set -euo pipefail
+          source "$RUNNER_TEMP/lib.sh"
+          install_version "$VERSION_A"
+          timed "download release assets v$VERSION_B" fetch_release "$VERSION_B"
+          timed "upload zip $VERSION_B" upload_zip "$VERSION_B"
+          update_stack "$VERSION_B" "$ZEROS" =
+          timed "failed update to $VERSION_B (zero checksum), rollback" expect_update_failure "does not match the expected checksum"
+          assert_eq "$(stack_output DeployedVersion)" "$VERSION_A" "DeployedVersion after rollback"
+
+      # ---------------------------------------------------------------- failed-first-deploy
+      - name: "Scenario: failed-first-deploy"
+        if: inputs.scenario == 'failed-first-deploy'
+        run: |
+          set -euo pipefail
+          source "$RUNNER_TEMP/lib.sh"
+          timed "download release assets v$VERSION_A" fetch_release "$VERSION_A"
+          timed "create stack (empty version)" create_stack "$VERSION_A"
+          timed "upload zip $VERSION_A" upload_zip "$VERSION_A"
+          update_stack "$VERSION_A" "$ZEROS" =
+          timed "first deploy with wrong checksum, rollback" expect_update_failure "does not match the expected checksum"
+          acct=$(account_id)
+          if bucket_exists "aphrodite-outputs-$acct"; then fail "outputs bucket exists after failed first deploy"; fi
+          log "ok: no aphrodite-outputs-$acct bucket after rollback"
+          timed "retry with correct checksum" deploy_version "$VERSION_A"
+          assert_eq "$(stack_output DeployedVersion)" "$VERSION_A" "DeployedVersion after retry"
+
+      # ---------------------------------------------------------------- uninstall-keep
+      - name: "Scenario: uninstall-keep"
+        if: inputs.scenario == 'uninstall-keep'
+        run: |
+          set -euo pipefail
+          source "$RUNNER_TEMP/lib.sh"
+          install_version "$VERSION_A"
+          timed "delete stack (DeleteData=false)" delete_stack
+
+          doc=$(retained_json)
+          echo "$doc" | jq .
+          summary ""
+          summary "### retained-resources.json"
+          summary '```json'
+          summary "$(echo "$doc" | jq .)"
+          summary '```'
+
+          # Each address must be listed, and each resource must still exist.
+          rec() { echo "$doc" | jq -c --arg a "$1" '.resources[] | select(.address == $a)'; }
+          check_bucket() { local r b; r=$(rec "$1"); [[ -n $r ]] || fail "$1 not in retained-resources.json"; b=$(jq -r .bucket <<< "$r"); bucket_exists "$b" || fail "bucket $b missing"; log "ok: bucket $b exists"; }
+          check_table() { local r t; r=$(rec "$1"); [[ -n $r ]] || fail "$1 not in retained-resources.json"; t=$(jq -r .name <<< "$r"); table_exists "$t" || fail "table $t missing"; log "ok: table $t exists"; }
+          check_key() { local r k; r=$(rec "$1"); [[ -n $r ]] || fail "$1 not in retained-resources.json"; k=$(jq -r .id <<< "$r"); aws kms describe-key --key-id "$k" > /dev/null || fail "KMS key $k missing"; log "ok: KMS key $k exists"; }
+          check_bucket module.outputs_bucket.aws_s3_bucket.outputs
+          check_bucket module.logging.aws_s3_bucket.trail
+          check_table module.search_api.aws_dynamodb_table.jobs
+          check_table module.search_api.aws_dynamodb_table.activity
+          check_key module.kms.aws_kms_key.secrets
+
+          {
+            echo ""
+            echo "### Left in the sandbox (clean up manually before the next run)"
+            echo ""
+            echo "- Stack \`$STACK\` is deleted; its buckets remain: state \`$STATE_BUCKET\` (holds retained-resources.json), artifact \`$ARTIFACT_BUCKET\`."
+            echo "$doc" | jq -r '.resources[] | "- retained: `\(.address)` id=`\(.id // "")` arn=`\(.arn // "")`"'
+            echo "- Connector secrets are in their 7-day recovery window."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ---------------------------------------------------------------- uninstall-delete
+      - name: "Scenario: uninstall-delete"
+        if: inputs.scenario == 'uninstall-delete'
+        run: |
+          set -euo pipefail
+          source "$RUNNER_TEMP/lib.sh"
+          install_version "$VERSION_A"
+          update_stack '=' '=' true
+          timed "update stack DeleteData=true" wait_ok update UPDATE_FAILED
+          timed "delete stack (DeleteData=true)" delete_stack
+
+          doc=$(retained_json)
+          echo "$doc" | jq .
+          # Anything not belonging to this e2e's installer buckets must be an Object-Lock-held outputs bucket from the record.
+          mapfile -t left < <(aws s3api list-buckets --query "Buckets[?starts_with(Name, 'aphrodite-')].Name" --output text | tr '\t' '\n' | grep -v '^aphrodite-e2e-' || true)
+          allowed=$(echo "$doc" | jq -r '.resources[] | select(.address == "module.outputs_bucket.aws_s3_bucket.outputs") | .bucket')
+          log "aphrodite buckets left besides installer buckets: ${left[*]:-none}"
+          for b in "${left[@]}"; do
+            [[ -n $b ]] || continue
+            [[ $b == "$allowed" ]] || fail "unexpected bucket left behind: $b"
+          done
+          for b in "$STATE_BUCKET" "$ARTIFACT_BUCKET"; do bucket_exists "$b" || fail "installer bucket $b missing"; done
+          log "ok: only the two installer buckets (plus recorded Object-Lock outputs bucket, if any) remain"
+          if table_exists aphrodite-activity-log || table_exists aphrodite-search-jobs; then fail "DynamoDB tables remain after DeleteData=true"; fi
+          summary ""
+          summary "Remaining after delete: installer buckets \`$STATE_BUCKET\`, \`$ARTIFACT_BUCKET\`; outputs bucket held by Object Lock: \`${allowed:-none}\`."
+
+      # ---------------------------------------------------------------- bad-inputs
+      - name: "Scenario: bad-inputs"
+        if: inputs.scenario == 'bad-inputs'
+        run: |
+          set -euo pipefail
+          source "$RUNNER_TEMP/lib.sh"
+          timed "download release assets v$VERSION_A" fetch_release "$VERSION_A"
+          timed "create stack (empty version)" create_stack "$VERSION_A"
+          # 9.9.9 was never uploaded.
+          update_stack 9.9.9 "$ZEROS" =
+          timed "update to un-uploaded 9.9.9" expect_update_failure "has not been uploaded"
+          # Right zip uploaded, wrong checksum.
+          timed "upload zip $VERSION_A" upload_zip "$VERSION_A"
+          update_stack "$VERSION_A" "$ZEROS" =
+          timed "update with wrong checksum" expect_update_failure "does not match the expected checksum"
+
+      # ---------------------------------------------------------------- bedrock-off
+      - name: "Scenario: bedrock-off"
+        if: inputs.scenario == 'bedrock-off'
+        run: |
+          set -euo pipefail
+          source "$RUNNER_TEMP/lib.sh"
+          log "Region $AWS_REGION must NOT have Bedrock model access enabled (use the region input)."
+          timed "download release assets v$VERSION_A" fetch_release "$VERSION_A"
+          timed "create stack (empty version)" create_stack "$VERSION_A"
+          timed "upload zip $VERSION_A" upload_zip "$VERSION_A"
+          update_stack "$VERSION_A" "$(sha_of "$VERSION_A")" =
+          timed "update fails on Bedrock pre-flight" expect_update_failure "is not accessible in"
+
+      # ---------------------------------------------------------------- cleanup
+      - name: Cleanup (delete stack with DeleteData=true, remove installer buckets)
+        if: always()
+        run: |
+          set -uo pipefail
+          source "$RUNNER_TEMP/lib.sh"
+          set +e
+          if [[ $SCENARIO == uninstall-keep ]]; then
+            summary ""
+            summary "Cleanup skipped for uninstall-keep: retained resources left for inspection (see above)."
+            exit 0
+          fi
+          rc=0
+          if [[ -n ${STACK_ID:-} ]]; then
+            status=$(stack_status 2> /dev/null || echo DELETE_COMPLETE)
+            if [[ $status != DELETE_COMPLETE ]]; then
+              [[ $status == *_IN_PROGRESS ]] && status=$(settle)
+              ver=$(stack_param AphroditeVersion)
+              dd=$(stack_param DeleteData)
+              case "$status" in
+                CREATE_COMPLETE | UPDATE_COMPLETE | UPDATE_ROLLBACK_COMPLETE)
+                  if [[ -n $ver && $ver != None && $dd != true ]]; then
+                    update_stack '=' '=' true && { settle > /dev/null; log "DeleteData=true update: $(stack_status)"; }
+                  fi
+                  ;;
+              esac
+              if ! delete_stack; then rc=1; echo "::error::stack delete failed; manual teardown needed (installer/README.md)"; fi
+            fi
+          fi
+          for b in "${STATE_BUCKET:-}" "${ARTIFACT_BUCKET:-}"; do
+            [[ -n $b ]] && purge_bucket "$b"
+          done
+          exit "$rc"
+
+      - name: Stack events to summary
+        if: always()
+        run: |
+          set -uo pipefail
+          source "$RUNNER_TEMP/lib.sh"
+          dump_events || true

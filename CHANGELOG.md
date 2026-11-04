@@ -21,3 +21,4 @@ version's release notes by the heading containing "[<version>]", so release head
 ### Notes
 
 - First-deploy timing gate (plan Task 2) pending: needs the sandbox AWS account.
+- End-to-end scenarios (installer-e2e.yml) written; runs pending the sandbox AWS account.
