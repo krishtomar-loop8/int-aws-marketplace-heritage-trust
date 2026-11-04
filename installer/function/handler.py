@@ -6,7 +6,9 @@ file must stay self-contained: stdlib plus boto3/botocore only.
 For each custom-resource event it decides whether to start a CodeBuild run (terraform
 apply/destroy), do nothing, or fail, and replies to CloudFormation. For apply/destroy the
 reply is sent later by the build itself (via CFN_RESPONSE_URL), so the handler returns
-without replying.
+without replying: when the build finishes, its EventBridge state-change event invokes this
+function again (``on_build_finished``), which replies using the reply details stored in the
+build's environment variables.
 """
 
 from __future__ import annotations
@@ -32,6 +34,8 @@ NOT_DEPLOYED: dict[str, str] = {k: "not-deployed" for k in OUTPUT_KEYS}
 
 _MISSING_CODES = {"404", "NoSuchKey", "NotFound"}
 CLEAR_VERSION_MSG = "Clearing AphroditeVersion is not supported; delete the stack to uninstall."
+BUILD_FAILED_MSG = "Deployment failed"
+MAX_REASON = 900
 NO_VERSION_MSG = (
     "Terraform state exists but no version is set — see installer/README.md 'Manual teardown'."
 )
@@ -264,8 +268,80 @@ def _on_custom_resource(event: dict) -> None:
     logger.info("Started %s build for version %s", decision.kind, version)
 
 
+def _failure_message(deps: Deps, build_ids: set[str]) -> str:
+    """The deploy script's last-error message if it belongs to this build, else generic."""
+    from botocore.exceptions import ClientError
+
+    try:
+        raw = deps.ssm.get_parameter(Name=LAST_ERROR_PARAM)["Parameter"]["Value"]
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") != "ParameterNotFound":
+            raise
+        return BUILD_FAILED_MSG
+    try:
+        last = json.loads(raw)
+    except ValueError:
+        return BUILD_FAILED_MSG
+    if isinstance(last, dict) and last.get("build_id") in build_ids and last.get("message"):
+        return str(last["message"])
+    return BUILD_FAILED_MSG
+
+
+def _failure_reason(message: str, deep_link: str) -> str:
+    # Keep the log link intact: trim the message, not the link.
+    suffix = f" — logs: {deep_link}" if deep_link else ""
+    return (message[: max(0, MAX_REASON - len(suffix))] + suffix)[:MAX_REASON]
+
+
+def _deployed_outputs(deps: Deps) -> dict[str, str]:
+    names = [OUTPUTS_PREFIX + k for k in OUTPUT_KEYS]
+    resp = deps.ssm.get_parameters(Names=names)
+    found = {p["Name"].removeprefix(OUTPUTS_PREFIX): p["Value"] for p in resp["Parameters"]}
+    if resp.get("InvalidParameters"):
+        logger.warning("Missing deployment outputs in SSM: %s", resp["InvalidParameters"])
+    return {**NOT_DEPLOYED, **found}
+
+
 def on_build_finished(event: dict) -> None:
-    logger.info("CodeBuild state-change handling not implemented")
+    deps = _get_deps()
+    detail = event.get("detail") or {}
+    build_id = detail.get("build-id")
+    status = detail.get("build-status")
+    if not build_id:
+        logger.warning("CodeBuild event without a build-id; ignoring")
+        return
+
+    builds = deps.codebuild.batch_get_builds(ids=[build_id]).get("builds", [])
+    if not builds:
+        logger.warning("build %s not found; ignoring", build_id)
+        return
+    build = builds[0]
+    env = {
+        v["name"]: v.get("value", "")
+        for v in build.get("environment", {}).get("environmentVariables", [])
+    }
+    if not env.get("CFN_RESPONSE_URL"):
+        logger.info("build %s not started by CloudFormation; ignoring", build_id)
+        return
+
+    event_like = {
+        "ResponseURL": env["CFN_RESPONSE_URL"],
+        "StackId": env["CFN_STACK_ID"],
+        "RequestId": env["CFN_REQUEST_ID"],
+        "LogicalResourceId": env["CFN_LOGICAL_ID"],
+    }
+    action = env.get("ACTION", "")
+    logger.info("build %s (%s) finished with status %s", build_id, action, status)
+
+    if status == "SUCCEEDED":
+        data = _deployed_outputs(deps) if action == "apply" else NOT_DEPLOYED
+        reply(event_like, "SUCCESS", "", data)
+        return
+
+    # last-error carries CODEBUILD_BUILD_ID ("<project>:<uuid>"); the event carries the ARN.
+    message = _failure_message(deps, {build_id, build.get("id", ""), build.get("arn", "")} - {""})
+    reason = _failure_reason(message, build.get("logs", {}).get("deepLink", ""))
+    reply(event_like, "FAILED", reason, NOT_DEPLOYED)
 
 
 def handler(event: dict, context: Any = None) -> None:

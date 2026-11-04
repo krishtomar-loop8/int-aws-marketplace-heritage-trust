@@ -1,0 +1,2 @@
+amazon.titan-embed-text-v2:0
+us.anthropic.claude-sonnet-4-6
