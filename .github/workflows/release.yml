@@ -7,7 +7,8 @@ env:
 
 on:
   push:
-    tags: ["v*.*.*"]
+    # Plain semver only; the installer's AphroditeVersion parameter accepts nothing else.
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
   workflow_dispatch:
     inputs:
       dry_run:
@@ -37,6 +38,10 @@ jobs:
           set -euo pipefail
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
             VERSION="${GITHUB_REF_NAME#v}"
+            if ! [[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::Tag $GITHUB_REF_NAME is not vMAJOR.MINOR.PATCH; the installer only accepts plain semver versions."
+              exit 1
+            fi
           else
             VERSION="0.0.0-dryrun"
           fi
