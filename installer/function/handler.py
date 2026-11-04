@@ -253,14 +253,15 @@ def _on_custom_resource(event: dict) -> None:
         "CFN_LOGICAL_ID": event["LogicalResourceId"],
         "CFN_PHYSICAL_ID": physical_id(stack_id),
     }
+    # Clear before starting: any failure here must fail the reply while no build exists.
+    _clear_last_error(deps)
     deps.codebuild.start_build(
         projectName=deps.project_name,
         environmentVariablesOverride=[
-            {"name": k, "value": v, "type": "PLAINTEXT"} for k, v in env.items()
+            {"name": k, "value": v, "type": "PLAINTEXT"} for k, v in env.items() if v != ""
         ],
     )
     logger.info("Started %s build for version %s", decision.kind, version)
-    _clear_last_error(deps)
 
 
 def on_build_finished(event: dict) -> None:

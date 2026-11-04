@@ -246,6 +246,21 @@ def test_apply_starts_build_and_does_not_reply(monkeypatch):
     assert env["CFN_PHYSICAL_ID"] == "aphrodite-123456789012-ca-central-1"
     assert all(e["type"] == "PLAINTEXT" for e in call["environmentVariablesOverride"])
     assert deps.ssm.deleted == ["/aphrodite/installer/last-error"]
+    assert "TF_VAR_saml_metadata_url" not in env
+    assert all(e["value"] != "" for e in call["environmentVariablesOverride"])
+
+
+def test_last_error_clear_failure_fails_before_build(monkeypatch):
+    deps, puts = _setup(monkeypatch, keys={RELEASE_1})
+
+    def boom(Name):  # noqa: N803
+        raise _client_error("AccessDeniedException", "DeleteParameter")
+
+    deps.ssm.delete_parameter = boom
+    h.handler(_event(), None)
+    assert len(puts) == 1
+    assert puts[0]["body"]["Status"] == "FAILED"
+    assert deps.codebuild.started == []
 
 
 def test_missing_bundle_sha_fails(monkeypatch):
