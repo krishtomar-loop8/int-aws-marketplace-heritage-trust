@@ -292,23 +292,38 @@ Resources:
         Type: NO_SOURCE
         BuildSpec: |
           version: 0.2
+          env:
+            shell: bash
           phases:
             build:
               commands:
                 - |
                   set -euo pipefail
-                  aws s3 cp "s3://$ARTIFACT_BUCKET/releases/$VERSION/aphrodite-$VERSION.zip" .
-                  if ! echo "$BUNDLE_SHA256  aphrodite-$VERSION.zip" | sha256sum -c -; then
-                    python3 - "$CODEBUILD_BUILD_ID" > last-error.json <<'PY'
-                  import json, sys
-                  msg = "Uploaded release does not match the expected checksum \u2014 re-upload the file from the GitHub Release."
-                  print(json.dumps({"build_id": sys.argv[1], "message": msg}))
-                  PY
-                    aws ssm put-parameter --name /aphrodite/installer/last-error --overwrite --type String --value "file://last-error.json"
+                  DL=$(mktemp -d)
+                  ZIP="$DL/aphrodite-$VERSION.zip"
+                  # Record a readable failure for the installer Lambda, then fail the build.
+                  # Messages stay ASCII here; \uXXXX escapes in them are decoded.
+                  last_error() {
+                    python3 -c 'import json, sys; msg = sys.argv[2].encode("latin-1", "backslashreplace").decode("unicode_escape"); print(json.dumps({"build_id": sys.argv[1], "message": msg[:1000]}))' "$CODEBUILD_BUILD_ID" "$1" > "$DL/last-error.json"
+                    aws ssm put-parameter --name /aphrodite/installer/last-error --overwrite --type String --value "file://$DL/last-error.json"
                     exit 1
+                  }
+                  aws s3 cp --only-show-errors "s3://$ARTIFACT_BUCKET/releases/$VERSION/aphrodite-$VERSION.zip" "$ZIP" \
+                    || last_error "Could not download releases/$VERSION/aphrodite-$VERSION.zip from $ARTIFACT_BUCKET"
+                  if ! echo "$BUNDLE_SHA256  $ZIP" | sha256sum -c -; then
+                    last_error 'Uploaded release does not match the expected checksum \u2014 re-upload the file from the GitHub Release.'
                   fi
-                  unzip -q "aphrodite-$VERSION.zip"
-                  python3 -m installer.bundle_manifest verify .
+                  # Unpack outside the download dir so the zip is never part of the verified tree.
+                  mkdir bundle
+                  unzip -q "$ZIP" -d bundle \
+                    || last_error "Release bundle failed integrity verification: cannot unzip aphrodite-$VERSION.zip"
+                  cd bundle
+                  if ! out=$(python3 -m installer.bundle_manifest verify . 2>&1); then
+                    echo "$out"
+                    bad=$(awk '/^  /{printf "%s%s", sep, substr($0, 3); sep=", "}' <<<"$out")
+                    last_error "Release bundle failed integrity verification: ${bad:-$(tail -n 1 <<<"$out")}"
+                  fi
+                  echo "$out"
                   bash installer/deploy.sh
       Tags:
         - Key: Project
