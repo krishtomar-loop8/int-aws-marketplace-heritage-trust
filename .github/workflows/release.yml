@@ -1,0 +1,136 @@
+name: Release
+
+# Publishes GitHub Release assets only. No AWS credentials, no OIDC.
+env:
+  # Exact pin. Bump to the newest 1.x at release time.
+  TERRAFORM_VERSION: "1.13.5"
+
+on:
+  push:
+    # Plain semver only; the installer's AphroditeVersion parameter accepts nothing else.
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Upload assets as workflow artifacts instead of creating a release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Resolve version
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            if ! [[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::Tag $GITHUB_REF_NAME is not vMAJOR.MINOR.PATCH; the installer only accepts plain semver versions."
+              exit 1
+            fi
+          else
+            VERSION="0.0.0-dryrun"
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Build Lambda package
+        working-directory: terraform
+        run: |
+          set -e
+          rm -rf build/lambda && mkdir -p build/lambda
+          cp -r ../backend ../services build/lambda/
+          # tzdata: IANA zone data for zoneinfo — the matter-search dossier renders
+          # dates in America/Vancouver and the Lambda runtime ships no system tzdb.
+          python3 -m pip install requests python-docx fpdf2 openpyxl rapidfuzz reportlab tzdata \
+            --platform manylinux2014_x86_64 --implementation cp --python-version 3.13 \
+            --only-binary=:all: --target build/lambda --quiet
+          find build/lambda -type d -name '__pycache__' -prune -exec rm -rf {} +
+          find build/lambda -type d -name 'tests' -prune -exec rm -rf {} +
+          find build/lambda -type d -name '*.dist-info' -prune -exec rm -rf {} +
+
+      - name: Build SPA
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Download pinned Terraform
+        run: |
+          set -euo pipefail
+          mkdir -p bundle/bin
+          curl -fsSL -o /tmp/tf.zip \
+            "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+          curl -fsSL -o /tmp/tf.sums \
+            "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_SHA256SUMS"
+          (cd /tmp && grep "terraform_${TERRAFORM_VERSION}_linux_amd64.zip" tf.sums | sha256sum -c -)
+          unzip -o /tmp/tf.zip terraform -d bundle/bin
+          chmod +x bundle/bin/terraform
+
+      - name: Mirror providers
+        run: |
+          set -euo pipefail
+          # .terraform.lock.hcl is gitignored; generate it so lock and mirror agree.
+          bundle/bin/terraform -chdir=terraform init -backend=false -input=false
+          bundle/bin/terraform -chdir=terraform providers mirror -platform=linux_amd64 ../bundle/providers
+
+      - name: Assemble bundle
+        run: |
+          set -euo pipefail
+          mkdir -p bundle/terraform bundle/frontend bundle/installer
+          tar -C terraform --exclude='./.terraform' -cf - . | tar -C bundle/terraform -xf -
+          cp -r frontend/dist bundle/frontend/dist
+          cp installer/__init__.py installer/bundle_manifest.py installer/deploy.sh \
+            installer/retained-addresses.txt installer/preflight-models.txt bundle/installer/
+          python3 -m installer.bundle_manifest build bundle "$VERSION" "$GITHUB_SHA"
+
+      - name: Package assets
+        run: |
+          set -euo pipefail
+          mkdir -p dist-release
+          (cd bundle && zip -qr -X "../dist-release/aphrodite-${VERSION}.zip" .)
+          (cd dist-release && sha256sum "aphrodite-${VERSION}.zip" > "aphrodite-${VERSION}.zip.sha256")
+          python3 -m installer.render dist-release/installer.yaml
+
+      - name: Release notes
+        run: |
+          set -euo pipefail
+          : > notes.md
+          if [ -f CHANGELOG.md ]; then
+            awk -v v="$VERSION" '
+              /^## / { if (found) exit; if (index($0, "[" v "]") || index($0, " " v)) { found = 1; next } }
+              found { print }
+            ' CHANGELOG.md > notes.md
+          fi
+          if [ ! -s notes.md ]; then echo "See CHANGELOG.md." > notes.md; fi
+
+      - name: Create release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist-release/installer.yaml \
+            "dist-release/aphrodite-${VERSION}.zip" \
+            "dist-release/aphrodite-${VERSION}.zip.sha256" \
+            --title "$GITHUB_REF_NAME" --notes-file notes.md
+
+      - name: Upload dry-run artifacts
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: dist-release/

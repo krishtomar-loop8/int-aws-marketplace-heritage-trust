@@ -32,6 +32,9 @@ dev = [
     # pandas builds the in-memory .xlsx fixtures in the ported screener tests
     # (dev/test only — never vendored into the Lambda package).
     "pandas",
+    # Installer template lint (cfn-lint) and template parsing in installer tests.
+    "cfn-lint",
+    "pyyaml",
 ]
 
 [tool.ruff]
@@ -53,7 +56,7 @@ extend-exclude = [
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
-testpaths = ["backend", "services"]
+testpaths = ["backend", "services", "installer"]
 addopts = "-q"
 
 [tool.setuptools]

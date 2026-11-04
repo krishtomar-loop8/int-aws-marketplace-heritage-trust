@@ -18,6 +18,7 @@ See `CLAUDE.md` for architecture, conventions, and constraints.
 | `terraform/` | Infrastructure as Code; `terraform/bootstrap/` holds the one-time CloudFormation bootstrap |
 | `scripts/` | Operational / build / test scripts |
 | `apps/` | Standalone tools (CLI, dashboards) if needed |
+| `installer/` | CloudFormation installer for buyer accounts |
 
 ## Deployment model
 

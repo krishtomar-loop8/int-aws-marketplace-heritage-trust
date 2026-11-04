@@ -13,6 +13,10 @@ resource "aws_dynamodb_table" "jobs" {
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "job_id"
 
+  point_in_time_recovery {
+    enabled = true
+  }
+
   attribute {
     name = "job_id"
     type = "S"
@@ -65,6 +69,10 @@ resource "aws_dynamodb_table" "activity" {
   hash_key     = "log_id"
   range_key    = "ts"
 
+  point_in_time_recovery {
+    enabled = true
+  }
+
   attribute {
     name = "log_id"
     type = "S"
@@ -86,6 +94,10 @@ resource "aws_dynamodb_table" "integration_health" {
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "pk"
   range_key    = "sk"
+
+  point_in_time_recovery {
+    enabled = true
+  }
 
   attribute {
     name = "pk"

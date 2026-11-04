@@ -74,7 +74,7 @@ jobs:
         run: terraform fmt -check -recursive -diff
 
       - name: Init
-        run: terraform init -input=false
+        run: terraform init -input=false -backend-config="region=${{ vars.AWS_REGION }}"
 
       - name: Validate
         run: terraform validate

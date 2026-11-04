@@ -1,0 +1,14 @@
+module.outputs_bucket.aws_s3_bucket.outputs
+module.outputs_bucket.aws_s3_bucket_versioning.outputs
+module.outputs_bucket.aws_s3_bucket_object_lock_configuration.outputs
+module.outputs_bucket.aws_s3_bucket_server_side_encryption_configuration.outputs
+module.outputs_bucket.aws_s3_bucket_public_access_block.outputs
+module.logging.aws_s3_bucket.trail
+module.logging.aws_s3_bucket_versioning.trail
+module.logging.aws_s3_bucket_public_access_block.trail
+module.logging.aws_s3_bucket_server_side_encryption_configuration.trail
+module.logging.aws_s3_bucket_policy.trail
+module.search_api.aws_dynamodb_table.jobs
+module.search_api.aws_dynamodb_table.activity
+module.kms.aws_kms_key.secrets
+module.kms.aws_kms_alias.secrets

@@ -31,4 +31,4 @@ aws cloudformation describe-stacks \
 Outputs map to GitHub repo variables: `StateBucketName` → `TF_STATE_BUCKET`,
 `DeployRoleArn` → `AWS_DEPLOY_ROLE_ARN`, `Region` → `AWS_REGION`.
 
-`TF_STATE_BUCKET` is also passed to `terraform init -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=aphrodite/terraform.tfstate"` since `terraform/backend.tf` ships without a hardcoded bucket/key.
+`TF_STATE_BUCKET` is also passed to `terraform init -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="key=aphrodite/terraform.tfstate" -backend-config="region=$AWS_REGION"` since `terraform/backend.tf` ships without a hardcoded bucket/key.
