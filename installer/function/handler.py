@@ -390,7 +390,7 @@ def handler(event: dict, context: Any = None) -> None:
             url = event.get("ResponseURL", "")
             msg = str(exc).replace(url, "<redacted>") if url else str(exc)
             logger.error("Custom resource failed: %s: %s", type(exc).__name__, msg[:500])
-            reply(event, "FAILED", str(exc)[:500], NOT_DEPLOYED)
+            reply(event, "FAILED", msg[:500], NOT_DEPLOYED)
     elif event.get("source") == "aws.codebuild":
         on_build_finished(event)
     else:

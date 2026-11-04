@@ -417,3 +417,10 @@ def test_unreadable_state_counts_as_deployed(monkeypatch):
     _, puts = _setup(monkeypatch, status="DELETE_IN_PROGRESS", state="not json")
     h.handler(_event("Delete", version="", sha=""), None)
     assert puts[0]["body"]["Reason"] == h.NO_VERSION_MSG
+
+
+def test_exception_reason_redacts_response_url(monkeypatch):
+    _, puts = _setup(monkeypatch, cfn_error=RuntimeError(f"bad {URL}"))
+    h.handler(_event(), None)
+    assert puts[0]["body"]["Status"] == "FAILED"
+    assert puts[0]["body"]["Reason"] == "bad <redacted>"
