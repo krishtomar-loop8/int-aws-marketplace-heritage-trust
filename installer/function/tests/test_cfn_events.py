@@ -119,6 +119,7 @@ def _event(request_type="Create", version="1.0.0", old_version=None, sha="abc", 
 
 
 RELEASE_1 = (BUCKET, "releases/1.0.0/aphrodite-1.0.0.zip")
+URB = "UPDATE_ROLLBACK_IN_PROGRESS"
 
 
 @pytest.mark.parametrize(
@@ -204,6 +205,49 @@ RELEASE_1 = (BUCKET, "releases/1.0.0/aphrodite-1.0.0.zip")
 def test_decide_table(rt, props, old, status, state, kind, version, delete_data):
     d = h.decide(rt, props, old, status, state)
     assert (d.kind, d.version, d.delete_data) == (kind, version, delete_data)
+
+
+SHA_OLD = "a" * 64
+
+
+def test_decide_rollback_uses_old_sha_when_state_present():
+    old = {"Version": "1.0.0", "BundleSha256": SHA_OLD}
+    d = h.decide("Update", {"Version": "", "BundleSha256": ""}, old, URB, True)
+    assert (d.kind, d.version, d.delete_data, d.bundle_sha256) == (
+        "destroy",
+        "1.0.0",
+        True,
+        SHA_OLD,
+    )
+
+
+def test_decide_rollback_without_state_is_noop():
+    old = {"Version": "1.0.0", "BundleSha256": SHA_OLD}
+    assert h.decide("Update", {"Version": ""}, old, URB, False).kind == "noop"
+
+
+def _rollback_event():
+    event = _event("Update", version="", old_version="1.0.0", sha="")
+    event["OldResourceProperties"]["BundleSha256"] = SHA_OLD
+    return event
+
+
+def test_rollback_handler_destroys_with_old_sha(monkeypatch):
+    deps, puts = _setup(monkeypatch, keys={RELEASE_1}, status=URB, state=True)
+    h.handler(_rollback_event(), None)
+    assert puts == []
+    env = {e["name"]: e["value"] for e in deps.codebuild.started[0]["environmentVariablesOverride"]}
+    assert env["ACTION"] == "destroy"
+    assert env["VERSION"] == "1.0.0"
+    assert env["BUNDLE_SHA256"] == SHA_OLD
+    assert env["DELETE_DATA"] == "true"
+
+
+def test_rollback_handler_without_state_replies_success(monkeypatch):
+    deps, puts = _setup(monkeypatch, status=URB, state=False)
+    h.handler(_rollback_event(), None)
+    assert [p["body"]["Status"] for p in puts] == ["SUCCESS"]
+    assert deps.codebuild.started == []
 
 
 def test_decide_fail_messages():

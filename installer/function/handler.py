@@ -59,6 +59,8 @@ class Decision:
     version: str = ""
     delete_data: bool = False
     reason: str = ""
+    bundle_sha256: str = ""
+    from_old: bool = False  # version/sha/build settings come from OldResourceProperties
 
 
 def _default_http_put(url: str, body: bytes) -> None:
@@ -115,27 +117,35 @@ def decide(
 ) -> Decision:
     version = props.get("Version") or ""
     old_version = old_props.get("Version") or ""
+    sha = props.get("BundleSha256") or ""
+    old_sha = old_props.get("BundleSha256") or ""
 
     if request_type == "Create":
-        return Decision("apply", version) if version else Decision("noop")
+        if not version:
+            return Decision("noop")
+        return Decision("apply", version, bundle_sha256=sha)
 
     if request_type == "Update":
         if version:
-            return Decision("apply", version)
+            return Decision("apply", version, bundle_sha256=sha)
         if not old_version:
             return Decision("noop")
         if stack_status == "UPDATE_ROLLBACK_IN_PROGRESS":
-            return Decision("destroy", old_version, True)
+            if not state_exists:
+                return Decision("noop")  # nothing was deployed, nothing to tear down
+            return Decision("destroy", old_version, True, bundle_sha256=old_sha, from_old=True)
         return Decision("fail", reason=CLEAR_VERSION_MSG)
 
     if request_type == "Delete":
         if stack_status == "ROLLBACK_IN_PROGRESS":
-            return Decision("destroy", version, True) if state_exists else Decision("noop")
+            if not state_exists:
+                return Decision("noop")
+            return Decision("destroy", version, True, bundle_sha256=sha)
         if not state_exists:
             return Decision("noop")
         if not version:
             return Decision("fail", reason=NO_VERSION_MSG)
-        return Decision("destroy", version, props.get("DeleteData") == "true")
+        return Decision("destroy", version, props.get("DeleteData") == "true", bundle_sha256=sha)
 
     return Decision("fail", reason=f"Unknown RequestType {request_type}")
 
@@ -224,7 +234,9 @@ def _on_custom_resource(event: dict) -> None:
         reply(event, "FAILED", decision.reason, NOT_DEPLOYED)
         return
 
-    if not props.get("BundleSha256"):
+    # Build settings must come from the same property set the version was taken from.
+    src = old_props if decision.from_old else props
+    if not decision.bundle_sha256:
         reply(event, "FAILED", "BundleSha256 is required", NOT_DEPLOYED)
         return
 
@@ -246,11 +258,11 @@ def _on_custom_resource(event: dict) -> None:
     env = {
         "ACTION": decision.kind,
         "VERSION": version,
-        "BUNDLE_SHA256": props.get("BundleSha256", ""),
+        "BUNDLE_SHA256": decision.bundle_sha256,
         "DELETE_DATA": "true" if decision.delete_data else "false",
         "TF_VAR_aws_region": region,
-        "TF_VAR_environment": props.get("Environment", ""),
-        "TF_VAR_saml_metadata_url": props.get("SamlMetadataUrl", ""),
+        "TF_VAR_environment": src.get("Environment", ""),
+        "TF_VAR_saml_metadata_url": src.get("SamlMetadataUrl", ""),
         "CFN_RESPONSE_URL": event["ResponseURL"],
         "CFN_STACK_ID": stack_id,
         "CFN_REQUEST_ID": event["RequestId"],
