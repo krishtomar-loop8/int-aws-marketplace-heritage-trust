@@ -77,9 +77,17 @@ def test_build_timeout_is_55(doc):
     assert doc["Resources"]["DeployProject"]["Properties"]["TimeoutInMinutes"] == 55
 
 
-def test_build_rule_terminal_statuses_only(doc):
+def test_build_queue_timeout_keeps_build_within_service_timeout(doc):
+    props = doc["Resources"]["DeployProject"]["Properties"]
+    # 5 is CodeBuild's minimum queue timeout; queue + build fit in the 60-minute ServiceTimeout.
+    assert props["QueuedTimeoutInMinutes"] == 5
+    assert props["QueuedTimeoutInMinutes"] + props["TimeoutInMinutes"] <= 60
+
+
+def test_build_rule_matches_every_terminal_status(doc):
+    # TIMED_OUT and FAULT must reach the function too, or CloudFormation waits out the hour.
     pattern = doc["Resources"]["BuildFinishedRule"]["Properties"]["EventPattern"]
-    assert pattern["detail"]["build-status"] == ["SUCCEEDED", "FAILED", "STOPPED"]
+    assert pattern["detail"]["build-status"] == [{"anything-but": ["IN_PROGRESS"]}]
 
 
 def test_no_governance_bypass(rendered):

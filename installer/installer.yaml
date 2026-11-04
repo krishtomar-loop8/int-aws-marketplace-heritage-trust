@@ -275,6 +275,7 @@ Resources:
       Description: Downloads the uploaded Aphrodite release and runs installer/deploy.sh.
       ServiceRole: !GetAtt DeployRole.Arn
       TimeoutInMinutes: 55
+      QueuedTimeoutInMinutes: 5
       Artifacts:
         Type: NO_ARTIFACTS
       Environment:
@@ -411,7 +412,7 @@ Resources:
         detail-type: ["CodeBuild Build State Change"]
         detail:
           project-name: [!Ref DeployProject]
-          build-status: ["SUCCEEDED", "FAILED", "STOPPED"]
+          build-status: [{"anything-but": ["IN_PROGRESS"]}]
       Targets:
         - Id: installer-function
           Arn: !GetAtt InstallerFunction.Arn

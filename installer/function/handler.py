@@ -345,6 +345,9 @@ def on_build_finished(event: dict) -> None:
     if not build_id:
         logger.warning("CodeBuild event without a build-id; ignoring")
         return
+    if status == "IN_PROGRESS":
+        logger.info("build %s still in progress; ignoring", build_id)
+        return
 
     builds = deps.codebuild.batch_get_builds(ids=[build_id]).get("builds", [])
     if not builds:

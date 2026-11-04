@@ -3,6 +3,7 @@
 import json
 import logging
 
+import pytest
 from botocore.exceptions import ClientError
 
 from installer.function import handler as h
@@ -190,3 +191,18 @@ def test_response_url_never_logged_on_build_events(monkeypatch, caplog):
     h.handler(_event("FAILED"), None)
     assert caplog.records
     assert "secret123" not in caplog.text
+
+
+def test_in_progress_event_is_ignored(monkeypatch):
+    deps, puts = _setup(monkeypatch, _env(), _outputs_params())
+    h.handler(_event("IN_PROGRESS"), None)
+    assert puts == []
+    assert deps.codebuild.requested == []
+
+
+@pytest.mark.parametrize("status", ["TIMED_OUT", "FAULT"])
+def test_timed_out_or_fault_build_fails(monkeypatch, status):
+    _, puts = _setup(monkeypatch, _env(), _outputs_params())
+    h.handler(_event(status), None)
+    assert puts[0]["body"]["Status"] == "FAILED"
+    assert puts[0]["body"]["Reason"].endswith(DEEP_LINK)
