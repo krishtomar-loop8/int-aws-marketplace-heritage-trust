@@ -23,6 +23,7 @@ on:
           - upgrade
           - broken-upgrade
           - failed-first-deploy
+          - failed-first-deploy-delete
           - uninstall-keep
           - uninstall-delete
           - bad-inputs
@@ -113,6 +114,17 @@ jobs:
             echo "::endgroup::"
             summary "| $_pending | $((SECONDS - _start))s | ok |"
             _pending=""
+          }
+
+          # retry_for SECONDS CMD... : rerun CMD every 30s until it succeeds or SECONDS have passed.
+          retry_for() {
+            local deadline=$((SECONDS + $1))
+            shift
+            until "$@"; do
+              ((SECONDS < deadline)) || return 1
+              log "retrying in 30s: $*"
+              sleep 30
+            done
           }
 
           assert_eq() { [[ $1 == "$2" ]] || fail "$3: expected '$2', got '$1'"; log "ok: $3 == $2"; }
@@ -253,6 +265,41 @@ jobs:
           bucket_exists() { aws s3api head-bucket --bucket "$1" 2> /dev/null; }
           table_exists() { aws dynamodb describe-table --table-name "$1" > /dev/null 2>&1; }
 
+          # --- failed first deploy (fails inside terraform apply, after other resources exist) ---
+          # module.logging.aws_cloudwatch_log_group.app has this fixed name; pre-creating it makes
+          # its create fail while Terraform creates the independent resources alongside it.
+          BLOCKER_LOG_GROUP=/aphrodite/app
+          remove_blocker() { aws logs delete-log-group --log-group-name "$BLOCKER_LOG_GROUP"; }
+
+          # rollback_destroy_status : status of the newest destroy build of this stack's project.
+          rollback_destroy_status() {
+            local project ids
+            project=$(aws cloudformation describe-stack-resource --stack-name "$STACK_ID" \
+              --logical-resource-id DeployProject --query StackResourceDetail.PhysicalResourceId --output text)
+            read -ra ids <<< "$(aws codebuild list-builds-for-project --project-name "$project" \
+              --sort-order DESCENDING --query 'ids[:5]' --output text)"
+            aws codebuild batch-get-builds --ids "${ids[@]}" --output text \
+              --query "builds[?environment.environmentVariables[?name=='ACTION' && value=='destroy']].buildStatus | [0]"
+          }
+
+          fail_first_deploy_midapply() {
+            local acct
+            timed "download release assets v$VERSION_A" fetch_release "$VERSION_A"
+            timed "create stack (empty version)" create_stack "$VERSION_A"
+            timed "upload zip $VERSION_A" upload_zip "$VERSION_A"
+            aws logs create-log-group --log-group-name "$BLOCKER_LOG_GROUP"
+            log "pre-created log group $BLOCKER_LOG_GROUP to fail terraform apply"
+            update_stack "$VERSION_A" "$(sha_of "$VERSION_A")" =
+            timed "first deploy fails mid-apply, rollback teardown" expect_update_failure "Deployment failed at step terraform apply"
+            assert_eq "$(rollback_destroy_status)" SUCCEEDED "rollback teardown (destroy build)"
+            acct=$(account_id)
+            if bucket_exists "aphrodite-outputs-$acct"; then fail "outputs bucket exists after failed first deploy"; fi
+            log "ok: no aphrodite-outputs-$acct bucket after rollback"
+            if table_exists aphrodite-activity-log; then fail "aphrodite-activity-log table exists after failed first deploy"; fi
+            log "ok: no aphrodite-activity-log table after rollback"
+            remove_blocker
+          }
+
           # purge_bucket BUCKET : delete all versions and markers, then the bucket (no Object Lock here).
           purge_bucket() {
             local b=$1 payload n
@@ -331,7 +378,8 @@ jobs:
           # fixed Terraform name (aphrodite-search); one HTTP API of that name exists in a clean sandbox.
           check_config() {
             local cfg api
-            cfg=$(curl -fsS --retry 10 --retry-delay 10 --retry-all-errors "$app_url/config.json" | jq -r .apiEndpoint)
+            # The deploy does not wait for CloudFront propagation; allow ~15 minutes to serve.
+            cfg=$(curl -fsS --retry 90 --retry-delay 10 --retry-max-time 900 --retry-all-errors "$app_url/config.json" | jq -r .apiEndpoint)
             api=$(aws apigatewayv2 get-apis --query "Items[?Name=='aphrodite-search'].ApiEndpoint | [0]" --output text)
             [[ -n $cfg && $cfg != null ]] || fail "config.json has no apiEndpoint"
             assert_eq "${cfg%/}" "${api%/}" "config.json apiEndpoint vs API Gateway endpoint"
@@ -357,7 +405,7 @@ jobs:
           await browser.close();
           JS
           timed "install Playwright chromium" bash -c "cd '$pw_dir' && npm init -y > /dev/null && npm i --silent playwright@$PLAYWRIGHT_VERSION && npx -y playwright@$PLAYWRIGHT_VERSION install --with-deps chromium"
-          timed "Playwright: Cognito sign-in redirect" bash -c "cd '$pw_dir' && APP_URL='$app_url' node signin.mjs"
+          timed "Playwright: Cognito sign-in redirect" retry_for 900 bash -c "cd '$pw_dir' && APP_URL='$app_url' node signin.mjs"
 
       # ---------------------------------------------------------------- upgrade
       - name: "Scenario: upgrade"
@@ -391,16 +439,20 @@ jobs:
         run: |
           set -euo pipefail
           source "$RUNNER_TEMP/lib.sh"
-          timed "download release assets v$VERSION_A" fetch_release "$VERSION_A"
-          timed "create stack (empty version)" create_stack "$VERSION_A"
-          timed "upload zip $VERSION_A" upload_zip "$VERSION_A"
-          update_stack "$VERSION_A" "$ZEROS" =
-          timed "first deploy with wrong checksum, rollback" expect_update_failure "does not match the expected checksum"
-          acct=$(account_id)
-          if bucket_exists "aphrodite-outputs-$acct"; then fail "outputs bucket exists after failed first deploy"; fi
-          log "ok: no aphrodite-outputs-$acct bucket after rollback"
-          timed "retry with correct checksum" deploy_version "$VERSION_A"
+          fail_first_deploy_midapply
+          timed "retry install" deploy_version "$VERSION_A"
           assert_eq "$(stack_output DeployedVersion)" "$VERSION_A" "DeployedVersion after retry"
+
+      # ---------------------------------------------------------------- failed-first-deploy-delete
+      - name: "Scenario: failed-first-deploy-delete"
+        if: inputs.scenario == 'failed-first-deploy-delete'
+        run: |
+          set -euo pipefail
+          source "$RUNNER_TEMP/lib.sh"
+          fail_first_deploy_midapply
+          # Version is empty again and the state object is empty: the delete must not fail.
+          timed "delete stack after rollback" delete_stack
+          assert_eq "$(stack_status)" DELETE_COMPLETE "stack status after delete"
 
       # ---------------------------------------------------------------- uninstall-keep
       - name: "Scenario: uninstall-keep"
@@ -540,6 +592,9 @@ jobs:
           for b in "${STATE_BUCKET:-}" "${ARTIFACT_BUCKET:-}"; do
             [[ -n $b ]] && purge_bucket "$b"
           done
+          if [[ $SCENARIO == failed-first-deploy* ]]; then
+            remove_blocker 2> /dev/null && log "removed leftover log group $BLOCKER_LOG_GROUP"
+          fi
           exit "$rc"
 
       - name: Stack events to summary
