@@ -68,10 +68,15 @@ Three steps. Replace `X.Y.Z`, `STACK` and the region.
    ```
 
    The update starts a CodeBuild run (Bedrock pre-flight, `terraform apply`, SPA publish).
-   Allow up to an hour; watch the build logs in the CodeBuild console (project
-   `DeployProject`). On success the stack outputs carry `AppUrl`, `DeployedVersion`,
-   `CognitoUserPoolId`, `SamlSpEntityId` and `SamlAcsUrl`. If `SamlMetadataUrl` is set, give
-   the last two to the buyer's identity provider admin.
+   Allow up to an hour; watch the build logs in the CodeBuild console. `DeployProject` is
+   only the logical ID; find the project's real name with the `describe-stack-resource`
+   command under "Unlock a stale Terraform lock". On success the stack outputs carry
+   `AppUrl`, `DeployedVersion`, `CognitoUserPoolId`, `SamlSpEntityId` and `SamlAcsUrl`. If
+   `SamlMetadataUrl` is set, give the last two to the buyer's identity provider admin.
+
+   `AppUrl` can take several minutes to start serving after `UPDATE_COMPLETE`: the deploy
+   does not wait for CloudFront to finish propagating. Retry for up to about 15 minutes
+   before treating it as a failure.
 
 If the build fails, the update fails with a reason and a log link, and CloudFormation rolls
 back. Fix the cause (see Messages below) and repeat step 3. Only one build runs at a time.
@@ -84,6 +89,9 @@ back. Fix the cause (see Messages below) and repeat step 3. Only one build runs 
 3. **Keep the old zip in the bucket until the upgrade succeeds.** If the update fails,
    CloudFormation rolls back by re-applying the previous version, which reads the old zip.
    Remove old zips only after `DeployedVersion` shows the new version.
+4. **Never remove the zip of the version currently deployed.** Uninstall (stack Delete)
+   downloads it to run the teardown; without it the delete fails with "has not been
+   uploaded".
 
 Clearing `AphroditeVersion` is not supported. Downgrades are an update to an older version
 whose zip is still in the bucket.
@@ -134,10 +142,11 @@ customer data exists yet.
 ## Manual teardown
 
 Message: *Terraform state exists but no version is set.* The stack is being deleted with an
-empty `AphroditeVersion`, but `aphrodite/terraform.tfstate` exists in the state bucket (for
-example a stack created against a state bucket kept from an earlier install, or a state left
-by a build that was stopped partway). The installer will not guess which release to destroy
-with, so the delete fails and nothing is removed.
+empty `AphroditeVersion`, but `aphrodite/terraform.tfstate` in the state bucket still tracks
+resources (for example a stack created against a state bucket kept from an earlier install,
+or a state left by a build that was stopped partway; an empty state left by an earlier
+teardown does not count). The installer will not guess which release to destroy with, so
+the delete fails and nothing is removed.
 
 A failed delete leaves the stack in `DELETE_FAILED`, where `update-stack` is not allowed. So
 the fix depends on whether you have already tried to delete.
@@ -148,18 +157,30 @@ still be in the artifact bucket), then delete the stack. Nothing else is needed.
 
 **(b) The delete already failed** (stack is `DELETE_FAILED`):
 
-1. Tear down manually. Unzip the deployed release locally and run `terraform init` against
-   the state bucket (`-backend-config="bucket=<StateBucket>"
-   -backend-config="key=aphrodite/terraform.tfstate" -backend-config="region=<region>"`),
-   using the bundled `bin/terraform`, then `terraform destroy` with credentials for the
-   buyer's account. Empty any non-Object-Lock S3 buckets first; they are not force-destroyed.
-   Object-Lock-held versions are never bypassed.
-2. Retry the delete skipping the custom resource:
+1. Run the teardown in the stack's own build project; never run Terraform locally for this.
+   Use the release last deployed (its zip must still be in the artifact bucket) and the
+   stack's `Environment` value; add `name=TF_VAR_saml_metadata_url,...` if `SamlMetadataUrl`
+   is set. Find `PROJECT` as in "Unlock a stale Terraform lock".
+
+   ```sh
+   aws codebuild start-build --project-name PROJECT --region REGION \
+     --environment-variables-override \
+       name=ACTION,value=destroy,type=PLAINTEXT \
+       name=DELETE_DATA,value=false,type=PLAINTEXT \
+       name=VERSION,value=X.Y.Z,type=PLAINTEXT \
+       name=BUNDLE_SHA256,value=SHA,type=PLAINTEXT \
+       name=TF_VAR_aws_region,value=REGION,type=PLAINTEXT \
+       name=TF_VAR_environment,value=ENVIRONMENT,type=PLAINTEXT
+   ```
+
+   `DELETE_DATA=false` makes `deploy.sh` apply the normal keep-data uninstall: the resources
+   in `installer/retained-addresses.txt` are recorded in `retained-resources.json` and kept,
+   everything else is emptied and destroyed, and Object Lock is never bypassed. Use `true`
+   only after the buyer has confirmed data deletion (as in Uninstall). The installer function
+   ignores this build's completion (it carries no CloudFormation reply details), so wait for
+   it to show `SUCCEEDED` in the CodeBuild console.
+2. Retry the delete skipping the custom resource, whose teardown you just ran:
    `aws cloudformation delete-stack --stack-name STACK --region REGION --retain-resources Deployment`.
-   This is required, not optional: `terraform destroy` leaves an empty
-   `aphrodite/terraform.tfstate` object in the state bucket, so the installer would still see
-   "state exists" with an empty version and fail the same way. (Deleting that object would
-   also work, but retaining `Deployment` avoids touching state.)
 
 ## Unlock a stale Terraform lock
 
@@ -184,16 +205,23 @@ the bundle first. Confirm no other build is running before unlocking.
 ## Reinstall after a data-keeping uninstall
 
 Out of automation in v1. The kept resources clash by name with a fresh install, so they must
-be imported into Terraform state before the first apply. Loop8-assisted:
+be imported into Terraform state before the first apply. Loop8-assisted, and an explicit
+exception to the "no local deployment" rule: a Loop8 engineer runs Terraform locally with
+credentials in the buyer's account. Touch only the addresses in
+`installer/retained-addresses.txt` (import exactly those; never `state rm` or import anything
+else), because they are exactly what `deploy.sh` keeps on a data-keeping uninstall.
 
 1. Read `retained-resources.json` (address, id, arn, bucket, name) from the OLD, retained
    state bucket of the uninstalled stack: `s3://<OldStateBucket>/retained-resources.json`.
 2. Create a new stack and run steps 1 and 2 of Install, but **do not** do step 3 yet.
-3. Using the release bundle and a Terraform backend pointing at the NEW stack's
-   `StateBucket` (init as in Manual teardown, with the new bucket name), run `terraform import <address> <id>` for each address in
-   `installer/retained-addresses.txt` (use the recorded `id`, which is the bucket or table
-   name, or the KMS key ID; aliases import by `alias/<name>`). Then `terraform plan` and
-   confirm it proposes no replacement of those resources.
+3. Unzip the release bundle and initialise Terraform against the NEW stack's `StateBucket`
+   with the bundled binary: `bin/terraform -chdir=terraform init
+   -backend-config="bucket=<NewStateBucket>" -backend-config="key=aphrodite/terraform.tfstate"
+   -backend-config="region=<region>"`. Then run `terraform import <address> <id>` for each
+   address in `installer/retained-addresses.txt` (use the recorded `id`, which is the bucket
+   or table name, or the KMS key ID; aliases import by `alias/<name>`). Then `terraform plan`
+   (with the same `aws_region` and `environment` values as the stack) and confirm it proposes
+   no replacement of those resources. Do not `terraform apply` locally.
 4. Run Install step 3.
 
 ## Custom domain
@@ -204,8 +232,10 @@ manual, Loop8-assisted follow-up using the Terraform variables `custom_domain` a
 `us-east-1`) and read the DNS validation records from the `acm_validation_records` output;
 the buyer adds the CNAME at their DNS provider; then apply again with
 `enable_custom_domain=true`. Run these with credentials in the buyer's account against the
-same state bucket as above, then re-publish the SPA config (the next release deploy does
-this).
+stack's `StateBucket` (init as in Reinstall step 3), then re-publish the SPA config (the next
+release deploy does this). Like Reinstall, this is a Loop8-assisted exception to the "no
+local deployment" rule, with the same retained-address discipline: never `state rm` or
+import anything outside `installer/retained-addresses.txt`.
 
 ## Messages you may see
 
@@ -213,10 +243,12 @@ this).
 |---|---|---|
 | `Terraform state exists but no version is set — see installer/README.md 'Manual teardown'.` | Stack delete with empty `AphroditeVersion` while state exists. | See Manual teardown. |
 | `Clearing AphroditeVersion is not supported; delete the stack to uninstall.` | Update set the version back to empty after a deploy. | Keep a version; to uninstall, delete the stack (see Uninstall). |
-| `Release X has not been uploaded to <bucket> (expected key releases/X/aphrodite-X.zip)` | Step 3 before step 2, or wrong key or version. | Upload the zip to that exact key and retry the update. |
+| `Release X has not been uploaded to <bucket> (expected key releases/X/aphrodite-X.zip)` | Step 3 before step 2, or wrong key or version. On a delete: the deployed version's zip was removed. | Upload the zip to that exact key and retry the update; on a delete, re-upload it and retry the delete. |
 | `BundleSha256 is required` | Version set without a checksum. | Pass the value from the `.sha256` asset. |
 | `a deployment is already in progress` | Another build is running. | Wait for it (CodeBuild console), then retry. |
 | `Uploaded release does not match the expected checksum — re-upload the file from the GitHub Release.` | Zip corrupted, wrong file, or wrong `BundleSha256`. | Re-download, compare the sha256, re-upload, retry. |
+| `Could not download releases/X/aphrodite-X.zip from <bucket>` | The build could not read the zip (removed after the stack checked, or no access). | Re-upload to that key and retry. |
+| `Release bundle failed integrity verification: <paths>` | The zip matches the checksum but its files do not match its `manifest.json`. | Bundle defect: escalate to Loop8 engineering. |
 | `Bedrock model <id> is not accessible in <region>. Enable it in the Bedrock console → Model access, then retry the stack update.` | Pre-flight failed. | Enable that model in the region (Prerequisites), retry the update. |
 | `Deployment failed — logs: <link>` | Build failed without a specific message. | Open the CodeBuild log link; fix and retry. |
 | `Deployment failed at step <step>` | `deploy.sh` failed in that step. | Same: read the log for that step. |
