@@ -181,6 +181,29 @@ def _object_exists(deps: Deps, bucket: str, key: str) -> bool:
     return True
 
 
+def _state_exists(deps: Deps) -> bool:
+    """True if the Terraform state tracks any resource.
+
+    ``terraform destroy`` leaves an empty state object behind, which is not a deployment.
+    A state that cannot be parsed counts as existing, so nothing is skipped by mistake.
+    """
+    from botocore.exceptions import ClientError
+
+    try:
+        body = deps.s3.get_object(Bucket=deps.state_bucket, Key=STATE_KEY)["Body"].read()
+    except ClientError as exc:
+        if _is_missing(exc):
+            return False
+        raise
+    try:
+        doc = json.loads(body)
+    except ValueError:
+        return True
+    if not isinstance(doc, dict) or not isinstance(doc.get("resources"), list):
+        return True
+    return bool(doc["resources"])
+
+
 def _stored_outputs(deps: Deps) -> dict[str, str]:
     out: dict[str, str] = {}
     kwargs: dict[str, Any] = {"Path": OUTPUTS_PREFIX}
@@ -222,7 +245,7 @@ def _on_custom_resource(event: dict) -> None:
     stack_id = event["StackId"]
 
     status = deps.cfn.describe_stacks(StackName=stack_id)["Stacks"][0]["StackStatus"]
-    state_exists = _object_exists(deps, deps.state_bucket, STATE_KEY)
+    state_exists = _state_exists(deps)
     decision = decide(request_type, props, old_props, status, state_exists)
     logger.info("RequestType=%s status=%s decision=%s", request_type, status, decision.kind)
 

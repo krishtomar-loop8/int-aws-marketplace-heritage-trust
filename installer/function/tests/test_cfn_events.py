@@ -1,5 +1,6 @@
 """Tests for the installer Lambda's custom-resource event handling (fake AWS clients)."""
 
+import io
 import json
 import logging
 
@@ -29,13 +30,24 @@ class FakeCfn:
 
 
 class FakeS3:
-    def __init__(self, keys=()):
+    def __init__(self, keys=(), bodies=None):
         self.keys = set(keys)
+        self.bodies = dict(bodies or {})
 
     def head_object(self, Bucket, Key):  # noqa: N803
         if (Bucket, Key) in self.keys:
             return {}
         raise _client_error("404")
+
+    def get_object(self, Bucket, Key):  # noqa: N803
+        if (Bucket, Key) in self.bodies:
+            return {"Body": io.BytesIO(self.bodies[Bucket, Key].encode())}
+        raise _client_error("NoSuchKey", "GetObject")
+
+
+STATE_OBJ = ("state-bkt", "aphrodite/terraform.tfstate")
+STATE_WITH_RESOURCES = json.dumps({"version": 4, "resources": [{"type": "aws_s3_bucket"}]})
+EMPTY_STATE = json.dumps({"version": 4, "serial": 9, "resources": []})
 
 
 class FakeSsm:
@@ -79,13 +91,13 @@ def _setup(
     state=False,
 ):
     puts: list[dict] = []
-    all_keys = set(keys)
+    bodies = {}
     if state:
-        all_keys.add(("state-bkt", "aphrodite/terraform.tfstate"))
+        bodies[STATE_OBJ] = STATE_WITH_RESOURCES if state is True else state
     deps = h.Deps(
         codebuild=FakeCodebuild(in_progress),
         ssm=FakeSsm(outputs),
-        s3=FakeS3(all_keys),
+        s3=FakeS3(keys, bodies),
         cfn=FakeCfn(status, cfn_error),
         http_put=lambda url, body: puts.append({"url": url, "body": json.loads(body)}),
         project_name="proj",
@@ -376,3 +388,32 @@ def test_response_url_never_logged(monkeypatch, caplog):
     assert caplog.records
     assert not any("secret123" in r.getMessage() or URL in r.getMessage() for r in caplog.records)
     assert "secret123" not in caplog.text
+
+
+def test_delete_after_rollback_teardown_with_empty_state_is_noop(monkeypatch):
+    # terraform destroy leaves an empty state object behind; that is not a deployment.
+    deps, puts = _setup(monkeypatch, status="DELETE_IN_PROGRESS", state=EMPTY_STATE)
+    h.handler(_event("Delete", version="", sha=""), None)
+    assert [p["body"]["Status"] for p in puts] == ["SUCCESS"]
+    assert deps.codebuild.started == []
+
+
+def test_delete_with_resources_in_state_and_no_version_still_fails(monkeypatch):
+    deps, puts = _setup(monkeypatch, status="DELETE_IN_PROGRESS", state=STATE_WITH_RESOURCES)
+    h.handler(_event("Delete", version="", sha=""), None)
+    assert puts[0]["body"]["Status"] == "FAILED"
+    assert puts[0]["body"]["Reason"] == h.NO_VERSION_MSG
+    assert deps.codebuild.started == []
+
+
+def test_rollback_with_empty_state_is_noop(monkeypatch):
+    deps, puts = _setup(monkeypatch, status=URB, state=EMPTY_STATE)
+    h.handler(_rollback_event(), None)
+    assert [p["body"]["Status"] for p in puts] == ["SUCCESS"]
+    assert deps.codebuild.started == []
+
+
+def test_unreadable_state_counts_as_deployed(monkeypatch):
+    _, puts = _setup(monkeypatch, status="DELETE_IN_PROGRESS", state="not json")
+    h.handler(_event("Delete", version="", sha=""), None)
+    assert puts[0]["body"]["Reason"] == h.NO_VERSION_MSG
