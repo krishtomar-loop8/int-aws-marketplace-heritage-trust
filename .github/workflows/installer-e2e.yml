@@ -153,10 +153,20 @@ jobs:
               --output text
           }
 
-          # wait_ok create|update|delete : the stock waiter; on failure show the Deployment reason.
+          # wait_ok create|update|delete [FAILED_EVENT_STATUS] : poll with settle (same 2h budget as the
+          # expected-failure paths; the stock waiter gives up after 1h) and require the *_COMPLETE
+          # status. On failure show the final status and the Deployment reason.
           wait_ok() {
-            if ! aws cloudformation wait "stack-$1-complete" --stack-name "$STACK_ID"; then
-              log "stack status: $(stack_status)"
+            local want final
+            case "$1" in
+              create) want=CREATE_COMPLETE ;;
+              update) want=UPDATE_COMPLETE ;;
+              delete) want=DELETE_COMPLETE ;;
+              *) fail "wait_ok: unknown kind $1" ;;
+            esac
+            final=$(settle) || final=TIMEOUT
+            if [[ $final != "$want" ]]; then
+              log "expected $want, stack status: $final"
               log "Deployment reason: $(failure_reason "${2:-UPDATE_FAILED}")"
               return 1
             fi
@@ -512,6 +522,19 @@ jobs:
                   ;;
               esac
               if ! delete_stack; then rc=1; echo "::error::stack delete failed; manual teardown needed (installer/README.md)"; fi
+            fi
+          fi
+          # If create failed before the buckets were exported, resolve them from the stack.
+          if [[ -n ${STACK_ID:-} ]]; then
+            if [[ -z ${STATE_BUCKET:-} ]]; then
+              STATE_BUCKET=$(aws cloudformation describe-stack-resources --stack-name "$STACK_ID" \
+                --query "StackResources[?LogicalResourceId=='StateBucket'].PhysicalResourceId | [0]" --output text 2> /dev/null)
+              [[ $STATE_BUCKET != None ]] || STATE_BUCKET=""
+            fi
+            if [[ -z ${ARTIFACT_BUCKET:-} ]]; then
+              ARTIFACT_BUCKET=$(aws cloudformation describe-stack-resources --stack-name "$STACK_ID" \
+                --query "StackResources[?LogicalResourceId=='ArtifactBucket'].PhysicalResourceId | [0]" --output text 2> /dev/null)
+              [[ $ARTIFACT_BUCKET != None ]] || ARTIFACT_BUCKET=""
             fi
           fi
           for b in "${STATE_BUCKET:-}" "${ARTIFACT_BUCKET:-}"; do
