@@ -56,6 +56,8 @@ resource "aws_cloudfront_distribution" "web" {
   default_root_object = "index.html"
   comment             = "Aphrodite — matter search SPA"
   price_class         = "PriceClass_100"
+  # Don't block apply on CloudFront propagation (can exceed the 1-hour installer budget).
+  wait_for_deployment = false
 
   # Attached only on Apply 2, once the cert is issued (see viewer_certificate).
   aliases = var.enable_custom_domain ? [var.custom_domain] : null
