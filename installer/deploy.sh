@@ -94,25 +94,24 @@ state_list() {
   tf state list
 }
 
-# retain REASON ADDRESS... : record each address's identifiers in
-# s3://$STATE_BUCKET/retained-resources.json (merged with any earlier record), then remove it
-# from Terraform state so `terraform destroy` leaves the resource in place. Addresses no longer
-# in state (e.g. a retried destroy) are skipped.
-retain() {
-  local reason=$1 addr head_err=$WORK/head.err doc=$WORK/retained.json new=$WORK/retained.jsonl
-  shift
-  local present=()
-  state_list >"$WORK/state.list"
-  for addr in "$@"; do
-    if grep -qxF "$addr" "$WORK/state.list"; then present+=("$addr"); fi
-  done
-  if ((${#present[@]} == 0)); then return 0; fi
+# read_lines VAR FILE : set array VAR to FILE's non-blank lines (whitespace stripped). Fails if
+# FILE is missing, unreadable or has no entries, so a broken bundle never fails open.
+read_lines() {
+  local -n _lines=$1
+  local file=$2 line
+  [[ -r $file ]] || fail "Installer bundle is missing $file"
+  _lines=()
+  while IFS= read -r line || [[ -n $line ]]; do
+    line=${line//[[:space:]]/}
+    if [[ -n $line ]]; then _lines+=("$line"); fi
+  done <"$file"
+  ((${#_lines[@]} > 0)) || fail "Installer bundle file $file has no entries"
+}
 
-  : >"$new"
-  for addr in "${present[@]}"; do
-    state_ids "$addr" >>"$new"
-  done
-
+# load_retained FILE : download retained-resources.json to FILE, or start an empty record if it
+# does not exist yet. Any other read error fails rather than risk overwriting earlier records.
+load_retained() {
+  local doc=$1 head_err=$WORK/head.err
   if aws s3api head-object --bucket "$STATE_BUCKET" --key "$RETAINED_KEY" >/dev/null 2>"$head_err"; then
     aws s3 cp --only-show-errors "s3://$STATE_BUCKET/$RETAINED_KEY" "$doc"
   elif grep -q '(404)' "$head_err"; then
@@ -121,6 +120,36 @@ retain() {
     cat "$head_err" >&2
     fail "Could not read s3://$STATE_BUCKET/$RETAINED_KEY"
   fi
+}
+
+# retain REASON ADDRESS... : record each address's identifiers in
+# s3://$STATE_BUCKET/retained-resources.json (merged with any earlier record), then remove it
+# from Terraform state so `terraform destroy` leaves the resource in place. Addresses no longer
+# in state (a retried destroy) are skipped. If none is in a non-empty state and nothing was
+# retained earlier, the address list has drifted from the Terraform code: fail before destroy.
+retain() {
+  local reason=$1 addr doc=$WORK/retained.json new=$WORK/retained.jsonl earlier
+  shift
+  local present=()
+  state_list >"$WORK/state.list"
+  for addr in "$@"; do
+    if grep -qxF "$addr" "$WORK/state.list"; then present+=("$addr"); fi
+  done
+  load_retained "$doc"
+  if ((${#present[@]} == 0)); then
+    earlier=$(python3 -c 'import json, sys
+print(len(json.load(open(sys.argv[1])).get("resources") or []))' "$doc")
+    if [[ -s $WORK/state.list ]] && ((earlier == 0)); then
+      fail "None of the resources to keep is in Terraform state and none was kept earlier; stopping before terraform destroy. Check installer/retained-addresses.txt against the Terraform modules."
+    fi
+    return 0
+  fi
+
+  : >"$new"
+  for addr in "${present[@]}"; do
+    state_ids "$addr" >>"$new"
+  done
+
   python3 - "$doc" "$new" "$reason" "${VERSION:-}" "$CODEBUILD_BUILD_ID" <<'PY'
 import json, sys
 doc_path, new_path, reason, version, build_id = sys.argv[1:]
@@ -144,37 +173,49 @@ PY
   done
 }
 
-# empty_bucket BUCKET : delete every object version and delete marker S3 allows, in batches
-# of up to 1000. Versions held by Object Lock stay (governance retention is never bypassed).
+# empty_bucket BUCKET : delete every object version and delete marker S3 allows. Each pass lists
+# the whole bucket first (CLI auto-pagination), then deletes in batches of up to 1000. Passes
+# repeat until the bucket is empty or S3 refused every version still listed (held by Object
+# Lock; governance retention is never bypassed). Capped at 5 passes; whatever is left then makes
+# `terraform destroy` fail (and retry) or, for the outputs bucket, keeps it.
 empty_bucket() {
-  local bucket=$1 token="" chunk
-  local page=$WORK/page.json
+  local bucket=$1 pass count refused n chunk listing=$WORK/versions.json
   echo "Emptying s3://$bucket (all versions)"
-  while :; do
-    local args=(--bucket "$bucket" --max-items 1000 --output json)
-    if [[ -n $token ]]; then args+=(--starting-token "$token"); fi
-    aws s3api list-object-versions "${args[@]}" >"$page"
+  for pass in 1 2 3 4 5; do
+    aws s3api list-object-versions --bucket "$bucket" --output json >"$listing"
     rm -f "$WORK"/delete-*.json
-    token=$(python3 - "$page" "$WORK" <<'PY'
+    count=$(python3 - "$listing" "$WORK" <<'PY'
 import json, sys
 with open(sys.argv[1]) as f:
-    page = json.load(f)
+    text = f.read().strip()
+listing = json.loads(text) if text else {}
 items = [
     {"Key": o["Key"], "VersionId": o["VersionId"]}
-    for o in (page.get("Versions") or []) + (page.get("DeleteMarkers") or [])
+    for o in (listing.get("Versions") or []) + (listing.get("DeleteMarkers") or [])
 ]
 for i in range(0, len(items), 1000):
     with open(f"{sys.argv[2]}/delete-{i // 1000}.json", "w") as f:
         json.dump({"Objects": items[i : i + 1000], "Quiet": True}, f)
-print(page.get("NextToken", ""))
+print(len(items))
 PY
     )
+    if ((count == 0)); then return 0; fi
+    refused=0
     for chunk in "$WORK"/delete-*.json; do
-      [[ -e $chunk ]] || continue
-      aws s3api delete-objects --bucket "$bucket" --delete "file://$chunk" >/dev/null
+      aws s3api delete-objects --bucket "$bucket" --delete "file://$chunk" --output json \
+        >"$WORK/deleted.json"
+      n=$(python3 -c 'import json, sys
+text = open(sys.argv[1]).read().strip()
+errors = (json.loads(text) if text else {}).get("Errors") or []
+for msg in sorted({"%s: %s" % (e.get("Code"), e.get("Message")) for e in errors})[:3]:
+    print("  refused: " + msg, file=sys.stderr)
+print(len(errors))' "$WORK/deleted.json")
+      refused=$((refused + n))
     done
-    if [[ -z $token ]]; then break; fi
+    echo "  pass $pass: $count version(s) listed, $refused refused"
+    if ((refused == count)); then return 0; fi
   done
+  echo "s3://$bucket is still not empty after 5 passes"
 }
 
 remaining_versions() {
@@ -200,7 +241,7 @@ empty_remaining_buckets() {
 preflight() {
   STEP="Bedrock pre-flight"
   local models model
-  mapfile -t models < <(grep -v '^[[:space:]]*$' installer/preflight-models.txt)
+  read_lines models installer/preflight-models.txt
   for model in "${models[@]}"; do
     echo "Pre-flight: checking Bedrock model $model"
     ERR_MSG="Bedrock model $model is not accessible in $AWS_REGION. Enable it in the Bedrock console → Model access, then retry the stack update."
@@ -289,7 +330,7 @@ do_destroy() {
   if [[ $DELETE_DATA != true ]]; then
     STEP="retain data resources"
     local addresses
-    mapfile -t addresses < <(grep -v '^[[:space:]]*$' installer/retained-addresses.txt)
+    read_lines addresses installer/retained-addresses.txt
     retain "DeleteData=false" "${addresses[@]}"
   else
     STEP="delete outputs bucket contents"
