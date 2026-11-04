@@ -90,8 +90,34 @@ def test_build_rule_matches_every_terminal_status(doc):
     assert pattern["detail"]["build-status"] == [{"anything-but": ["IN_PROGRESS"]}]
 
 
-def test_no_governance_bypass(rendered):
-    assert "BypassGovernanceRetention" not in rendered
+def _statements(doc):
+    for res in doc["Resources"].values():
+        if res["Type"] != "AWS::IAM::Role":
+            continue
+        for policy in res["Properties"].get("Policies", []):
+            yield from policy["PolicyDocument"]["Statement"]
+
+
+def _actions(stmt):
+    actions = stmt["Action"]
+    return [actions] if isinstance(actions, str) else actions
+
+
+def test_no_governance_bypass(doc):
+    # Defence in depth: the deploy role denies it explicitly, and nothing allows it by name.
+    stmts = list(_statements(doc))
+    assert not any(
+        s["Effect"] == "Allow" and "s3:BypassGovernanceRetention" in _actions(s) for s in stmts
+    )
+    policies = doc["Resources"]["DeployRole"]["Properties"]["Policies"]
+    deny = [
+        s
+        for p in policies
+        for s in p["PolicyDocument"]["Statement"]
+        if s["Effect"] == "Deny" and _actions(s) == ["s3:BypassGovernanceRetention"]
+    ]
+    assert len(deny) == 1
+    assert deny[0]["Resource"] == "*"
 
 
 def test_environment_always_passed(doc):

@@ -265,6 +265,10 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*"
+              - Sid: NeverBypassObjectLockGovernance
+                Effect: Deny
+                Action: s3:BypassGovernanceRetention
+                Resource: "*"
       Tags:
         - Key: Project
           Value: aphrodite
