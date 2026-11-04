@@ -1,0 +1,448 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Aphrodite installer. Launch this stack in your own AWS account to install Aphrodite.
+  It creates the state and release buckets, a CodeBuild project that runs the Terraform
+  deployment from an uploaded release bundle, and a Lambda-backed custom resource that
+  drives it. Nothing here references any account other than yours.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Release
+        Parameters: [AphroditeVersion, BundleSha256]
+      - Label:
+          default: Deployment
+        Parameters: [Environment, SamlMetadataUrl, DeleteData]
+
+Parameters:
+  AphroditeVersion:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^\d+\.\d+\.\d+$'
+    ConstraintDescription: Use a version such as 1.2.3, or leave empty on first launch.
+    Description: >-
+      Release to deploy (for example 1.2.3). Leave empty on first launch to create the
+      buckets, then upload the release zip and update the stack with the version.
+      Changing it later means an upgrade.
+  BundleSha256:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^[a-f0-9]{64}$'
+    ConstraintDescription: Use the 64-character lowercase hex SHA-256 from the GitHub Release.
+    Description: SHA-256 of the release zip, as published with the GitHub Release.
+  Environment:
+    Type: String
+    Default: prod
+    Description: Deployment environment name, passed to Terraform as environment.
+  SamlMetadataUrl:
+    Type: String
+    Default: ""
+    Description: Optional Entra ID SAML metadata URL that enables single sign-on.
+  DeleteData:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      On stack deletion, also remove stored data (true) or keep it (false).
+
+Resources:
+  StateBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-noncurrent-state-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 90
+      Tags:
+        - Key: Project
+          Value: aphrodite
+        - Key: ManagedBy
+          Value: cloudformation-installer
+
+  StateBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref StateBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt StateBucket.Arn
+              - !Sub "${StateBucket.Arn}/*"
+            Condition:
+              Bool:
+                "aws:SecureTransport": "false"
+
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-noncurrent-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 90
+      Tags:
+        - Key: Project
+          Value: aphrodite
+        - Key: ManagedBy
+          Value: cloudformation-installer
+
+  ArtifactBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ArtifactBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt ArtifactBucket.Arn
+              - !Sub "${ArtifactBucket.Arn}/*"
+            Condition:
+              Bool:
+                "aws:SecureTransport": "false"
+
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Assumed by CodeBuild to run the Aphrodite Terraform deployment.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                "aws:SourceAccount": !Ref AWS::AccountId
+      Policies:
+        - PolicyName: terraform-deploy-services
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ServicesManagedByTerraform
+                Effect: Allow
+                Action:
+                  - "s3:*"
+                  - "s3vectors:*"
+                  - "bedrock:*"
+                  - "kms:*"
+                  - "secretsmanager:*"
+                  - "logs:*"
+                  - "cloudtrail:*"
+                  - "lambda:*"
+                  - "apigateway:*"
+                  - "dynamodb:*"
+                  - "cognito-idp:*"
+                  - "cognito-identity:*"
+                  - "events:*"
+                  - "scheduler:*"
+                  - "sns:*"
+                  - "cloudfront:*"
+                  - "acm:*"
+                  - "cloudwatch:*"
+                  - "sts:GetCallerIdentity"
+                  - "tag:GetResources"
+                  - "tag:TagResources"
+                  - "tag:UntagResources"
+                Resource: "*"
+        - PolicyName: terraform-iam-scoped
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ManageProjectScopedIamResources
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:UpdateRole
+                  - iam:UpdateRoleDescription
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:CreatePolicy
+                  - iam:DeletePolicy
+                  - iam:CreatePolicyVersion
+                  - iam:DeletePolicyVersion
+                  - iam:TagPolicy
+                  - iam:UntagPolicy
+                  - iam:PassRole
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/aphrodite/*"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:policy/aphrodite/*"
+              - Sid: ReadIamForTerraformPlan
+                Effect: Allow
+                Action:
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:GetPolicy
+                  - iam:GetPolicyVersion
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListPolicyVersions
+                  - iam:ListInstanceProfilesForRole
+                  - iam:CreateServiceLinkedRole
+                Resource: "*"
+        - PolicyName: installer-build-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadReleaseBundle
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "${ArtifactBucket.Arn}/releases/*"
+              - Sid: ManageInstallerState
+                Effect: Allow
+                Action: "s3:*"
+                Resource:
+                  - !GetAtt StateBucket.Arn
+                  - !Sub "${StateBucket.Arn}/*"
+              - Sid: InstallerParameters
+                Effect: Allow
+                Action:
+                  - ssm:PutParameter
+                  - "ssm:GetParameter*"
+                  - "ssm:DeleteParameter*"
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/aphrodite/installer/*"
+              - Sid: PreflightModelAccess
+                Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource: "*"
+              - Sid: BuildLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*"
+      Tags:
+        - Key: Project
+          Value: aphrodite
+
+  DeployProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Description: Downloads the uploaded Aphrodite release and runs installer/deploy.sh.
+      ServiceRole: !GetAtt DeployRole.Arn
+      TimeoutInMinutes: 55
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/amazonlinux-x86_64-standard:5.0
+        EnvironmentVariables:
+          - Name: STATE_BUCKET
+            Type: PLAINTEXT
+            Value: !Ref StateBucket
+          - Name: ARTIFACT_BUCKET
+            Type: PLAINTEXT
+            Value: !Ref ArtifactBucket
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            build:
+              commands:
+                - |
+                  set -euo pipefail
+                  aws s3 cp "s3://$ARTIFACT_BUCKET/releases/$VERSION/aphrodite-$VERSION.zip" .
+                  if ! echo "$BUNDLE_SHA256  aphrodite-$VERSION.zip" | sha256sum -c -; then
+                    python3 - "$CODEBUILD_BUILD_ID" > last-error.json <<'PY'
+                  import json, sys
+                  msg = "Uploaded release does not match the expected checksum \u2014 re-upload the file from the GitHub Release."
+                  print(json.dumps({"build_id": sys.argv[1], "message": msg}))
+                  PY
+                    aws ssm put-parameter --name /aphrodite/installer/last-error --overwrite --type String --value "file://last-error.json"
+                    exit 1
+                  fi
+                  unzip -q "aphrodite-$VERSION.zip"
+                  python3 -m installer.bundle_manifest verify .
+                  bash installer/deploy.sh
+      Tags:
+        - Key: Project
+          Value: aphrodite
+
+  InstallerFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      Policies:
+        - PolicyName: installer-function
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: DescribeThisStack
+                Effect: Allow
+                Action: cloudformation:DescribeStacks
+                Resource: !Ref AWS::StackId
+              - Sid: ListBuckets
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource:
+                  - !GetAtt StateBucket.Arn
+                  - !GetAtt ArtifactBucket.Arn
+              - Sid: HeadStateAndReleases
+                Effect: Allow
+                Action: s3:GetObject
+                Resource:
+                  - !Sub "${StateBucket.Arn}/aphrodite/terraform.tfstate"
+                  - !Sub "${ArtifactBucket.Arn}/releases/*"
+              - Sid: DriveBuilds
+                Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                  - codebuild:ListBuildsForProject
+                Resource: !GetAtt DeployProject.Arn
+              - Sid: InstallerParameters
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                  - ssm:DeleteParameter
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/aphrodite/installer/*"
+      Tags:
+        - Key: Project
+          Value: aphrodite
+
+  InstallerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Drives the Aphrodite deployment build and answers CloudFormation.
+      Runtime: python3.13
+      Handler: index.handler
+      Timeout: 60
+      Role: !GetAtt InstallerFunctionRole.Arn
+      Environment:
+        Variables:
+          PROJECT_NAME: !Ref DeployProject
+          STATE_BUCKET: !Ref StateBucket
+          ARTIFACT_BUCKET: !Ref ArtifactBucket
+      Code:
+        ZipFile: |
+          #HANDLER_SOURCE#
+      Tags:
+        - Key: Project
+          Value: aphrodite
+
+  BuildFinishedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Wakes the installer function when a deployment build ends.
+      State: ENABLED
+      EventPattern:
+        source: ["aws.codebuild"]
+        detail-type: ["CodeBuild Build State Change"]
+        detail:
+          project-name: [!Ref DeployProject]
+          build-status: ["SUCCEEDED", "FAILED", "STOPPED"]
+      Targets:
+        - Id: installer-function
+          Arn: !GetAtt InstallerFunction.Arn
+          RetryPolicy:
+            MaximumRetryAttempts: 5
+
+  BuildFinishedPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref InstallerFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt BuildFinishedRule.Arn
+
+  Deployment:
+    Type: Custom::AphroditeDeployment
+    DependsOn:
+      - BuildFinishedRule
+      - BuildFinishedPermission
+      - StateBucketPolicy
+      - ArtifactBucketPolicy
+    Properties:
+      ServiceToken: !GetAtt InstallerFunction.Arn
+      ServiceTimeout: 3600
+      Version: !Ref AphroditeVersion
+      BundleSha256: !Ref BundleSha256
+      Environment: !Ref Environment
+      SamlMetadataUrl: !Ref SamlMetadataUrl
+      DeleteData: !Ref DeleteData
+
+Outputs:
+  AppUrl:
+    Description: URL of the Aphrodite application.
+    Value: !GetAtt Deployment.AppUrl
+  DeployedVersion:
+    Description: Version currently deployed.
+    Value: !GetAtt Deployment.DeployedVersion
+  CognitoUserPoolId:
+    Description: Cognito user pool ID.
+    Value: !GetAtt Deployment.CognitoUserPoolId
+  SamlSpEntityId:
+    Description: SAML service-provider entity ID for your identity provider.
+    Value: !GetAtt Deployment.SamlSpEntityId
+  SamlAcsUrl:
+    Description: SAML assertion consumer service URL for your identity provider.
+    Value: !GetAtt Deployment.SamlAcsUrl
+  ArtifactBucketName:
+    Description: Upload the release zip to releases/<version>/aphrodite-<version>.zip here.
+    Value: !Ref ArtifactBucket

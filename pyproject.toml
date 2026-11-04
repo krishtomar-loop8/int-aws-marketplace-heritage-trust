@@ -32,6 +32,9 @@ dev = [
     # pandas builds the in-memory .xlsx fixtures in the ported screener tests
     # (dev/test only — never vendored into the Lambda package).
     "pandas",
+    # Installer template lint (cfn-lint) and template parsing in installer tests.
+    "cfn-lint",
+    "pyyaml",
 ]
 
 [tool.ruff]

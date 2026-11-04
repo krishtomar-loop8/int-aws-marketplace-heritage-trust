@@ -28,3 +28,11 @@ jobs:
           # Exit code 5 = no tests collected yet (scaffold stage); treat as pass.
           if [ "$code" = "5" ]; then echo "No tests collected yet — passing."; exit 0; fi
           exit $code
+
+      - name: Installer template (render + cfn-lint)
+        run: |
+          python -m installer.render dist/installer.yaml
+          cfn-lint dist/installer.yaml
+
+      - name: Installer script (shellcheck)
+        run: shellcheck installer/deploy.sh
