@@ -51,9 +51,13 @@ variables).
   should match (e.g. configured `"Acme"`, party name `"ACME TRUST LTD."`)
   must still match, consistent with the existing `.lower()` comparison.
 - An invalid regex string in `APHRODITE_INTERNAL_MATTER_NUMBER_PATTERN`
-  should fail loudly at cold start (visible in CloudWatch), not be silently
-  swallowed — consistent with how `os.environ["APHRODITE_OUTPUTS_BUCKET"]`
-  and similar required values already fail in this codebase.
+  should fail loudly (visible in CloudWatch) the first time it's actually
+  used — `quality.configure()` itself just swaps the dataclass and can't
+  validate the pattern eagerly, so the `re.error` surfaces on the first
+  `exclusion_reason()` call inside that invocation of `run_export()`, not at
+  configure time. Not silently swallowed anywhere in between is what matters
+  — consistent with how `os.environ["APHRODITE_OUTPUTS_BUCKET"]` and similar
+  required values already fail in this codebase.
 - Overriding only one letterhead field (e.g. just the name) via env must
   leave the other three at their defaults, not blank them out.
 
@@ -96,11 +100,14 @@ Expected: FAIL — `render_framework` doesn't accept `org_name`/`office_address`
 
 - [ ] **Step 3: Implement in `backend/search/framework.py`**
 
-Rename the `FRAMEWORK` string constant to `_FRAMEWORK_TEMPLATE`, replacing the
-two org-name mentions (current lines 36-37: `"You are Aphrodite's internal
-matter-status assistant. Aphrodite\nis a BC-regulated trust company."`) and
-the office line (current lines 98-100) with literal placeholder tokens
-`{{ORG_NAME}}` and `{{OFFICE_ADDRESS}}`. Fix the leftover in the same edit:
+Rename the `FRAMEWORK` string constant to `_FRAMEWORK_TEMPLATE`, replacing
+**three** org-name mentions with the literal placeholder token
+`{{ORG_NAME}}` (current lines 36-37: `"You are Aphrodite's internal
+matter-status assistant. Aphrodite\nis a BC-regulated trust company."`; and
+current line 98: `"If a client's address matches Aphrodite's own office"` —
+easy to miss since it's a third, separate occurrence from the office-line
+templating below, not folded into it) and the office address on current
+lines 98-100 with `{{OFFICE_ADDRESS}}`. Fix the leftover in the same edit:
 the new office line reads `label it "c/o {{ORG_NAME}} (mailing address)"`
 (today it literally says `"c/o Heritage Trust (mailing address)"` — a
 rename-era leftover that survived because the string wraps across two source
@@ -212,17 +219,44 @@ git commit -m "feat: thread org config through MatterSynthesizer and handlers"
 - [ ] **Step 1: Write the failing test**
 
 ```python
-# add to backend/search/tests/test_orchestrator.py
-def test_dossier_builder_uses_custom_excluded_folders():
-    kb = FakeKnowledgeBase(hits=[make_hit(web_url=".../Shared Documents/Payroll/x.pdf")])
-    builder = DossierBuilder(knowledge_base=kb, excluded_sharepoint_folders=frozenset({"payroll"}))
-    dossier = builder.build(make_candidate(), correspondence_term="x")
-    assert all("Payroll" not in d.web_url for d in dossier.sharepoint)
+# add to backend/search/tests/test_orchestrator.py — modeled exactly on the
+# existing test_collect_sharepoint_excludes_hr_finance_defensively (same file,
+# ~line 1022), reusing its FakeKB / _kbhit / MatterCandidate fixtures, but with
+# a folder name ("payroll") the *default* exclusion set would NOT catch, to
+# prove the override — not just the default — is what's doing the excluding.
+def test_dossier_builder_uses_custom_excluded_folders() -> None:
+    cand = MatterCandidate(
+        name="Estate of John Smith",
+        refs=[SourceRef("clio", "123", "Smith")],
+        matter_type="estate",
+    )
+    kb = FakeKB(
+        [
+            _kbhit(
+                "John Smith matter doc.",
+                "will.pdf",
+                web_url="https://x/sites/DataA/Matters/Smith/will.pdf",
+            ),
+            _kbhit("Payroll.", "pay.xlsx", web_url="https://x/sites/DataA/Payroll/2026/pay.xlsx"),
+        ]
+    )
+    d = DossierBuilder(
+        knowledge_base=kb, excluded_sharepoint_folders=frozenset({"payroll"})
+    ).build(cand, correspondence_term="smith")
+
+    docs = d.section("documents").items
+    assert len(docs) == 1 and "will.pdf" in docs[0].summary  # the Payroll doc is dropped
 ```
 
-(Match whichever fake KB / candidate helpers this test file already uses for
-the existing SharePoint-exclusion tests — search for the current HR/Finance
-exclusion test as the pattern to copy.)
+(Ruling: don't assert on the `sources_reviewed` "N HR/Finance excluded"
+message text here — `orchestrator.py:1762` hardcodes that literal label
+regardless of which folder names are actually configured, so it would read
+"1 HR/Finance excluded" even though "payroll" isn't HR or Finance. Leaving
+that label as-is is a deliberate choice: genericizing its wording would
+require changing `test_collect_sharepoint_excludes_hr_finance_defensively`'s
+existing assertion, which the Global Constraints rule out as non-additive.
+This is a known, accepted cosmetic inaccuracy, not a functional one — the
+new test verifies the actual document filtering, which is what matters.)
 
 ```python
 # add to backend/api/tests/test_handlers.py
@@ -282,7 +316,7 @@ git commit -m "feat: make HR/Finance SharePoint folder exclusions configurable"
 
 **Files:**
 - Modify: `backend/lambdas/aml_export/quality.py`
-- Modify: `backend/lambdas/aml_export/export.py` (comment-only: remove bare "Nicole"/"HT" attributions at lines 184, 288, 315, 465, 1087 — no behavior change)
+- Modify: `backend/lambdas/aml_export/export.py` (comment-only: remove bare "Nicole"/"HT" attributions at lines 184, 288, 315, 466, 1089 — no behavior change)
 - Modify: `backend/lambdas/aml_export/handler.py` (`_build_deps`, `handler`)
 - Test: `backend/lambdas/aml_export/tests/test_quality.py`
 
@@ -389,11 +423,18 @@ In this same file, remove the bare "Nicole" attributions at lines 68, 89,
 166, and 170 (e.g. `"(Nicole, 2026-07-15/20)"` → delete the parenthetical;
 `"(Nicole item 1)"` / `"(Nicole item 2 / decision D)"` / `"(Nicole item 3)"`
 → drop the `"Nicole "` prefix, keeping `"(item 1)"` etc.), keeping the
-rationale text itself. In `export.py`, remove the bare "Nicole"/"HT"
-attributions at the lines listed in this task's Files section (e.g.
-`"(Nicole 2026-08-05)"` → delete the parenthetical; `"the HT list takes
-precedence"` → `"the designation list takes precedence"`). Both are
-comment-only; no test applies — verify with
+rationale text itself. In `export.py`:
+- Line 184 (`"(Nicole 2026-08-05)"`) and line 288 (`"(Nicole 2026-08-05)"`)
+  and line 315 (`"(Nicole 2026-07-28)"`): delete the parenthetical, keep the
+  rest of the sentence.
+- Line 466: `"The HT list takes precedence:"` → `"The designation list takes
+  precedence:"`.
+- Line 1089: `"the memo-vs-file mismatch Nicole flagged, 2026-07-28"` → `"the
+  memo-vs-file mismatch flagged during review"` (this one isn't a clean
+  parenthetical like the others — rewrite the clause, don't just strip a
+  suffix).
+
+Both files' cleanup is comment-only; no test applies — verify with
 `grep -n "Nicole\|\bHT\b" backend/lambdas/aml_export/quality.py backend/lambdas/aml_export/export.py`
 returning no matches.
 
@@ -418,7 +459,10 @@ def _org_config_from_env() -> quality.OrgConfig:
     ...  # (JSON-list, same fallback as Task 3) and APHRODITE_INTERNAL_MATTER_NUMBER_PATTERN
     ...  # (plain string, defaults to OrgConfig()'s own default when unset)
 ```
-Call `quality.configure(_org_config_from_env())` at the top of `_build_deps()`.
+`handler.py` does not currently import `quality` — add
+`from backend.lambdas.aml_export import quality` alongside its existing
+imports. Call `quality.configure(_org_config_from_env())` at the top of
+`_build_deps()`.
 
 - [ ] **Step 6: Run the full AML export test suite**
 
@@ -509,6 +553,12 @@ class LetterheadConfig:
 
 DEFAULT_LETTERHEAD = LetterheadConfig()
 ```
+This replaces the block at current lines 24-32, which also deletes the bare
+`"# Standing privacy disclosure at the foot of the letter (Nicole,
+2026-08-11)."` comment sitting directly above `_PRIVACY_NOTICE` (not
+mentioned in the spec's cleanup list, but it's inside the exact lines this
+step already rewrites, so dropping it here is free — keep the comment's
+substance, i.e. that this is a standing privacy disclosure, drop the name/date).
 Change `render_cover_letter(model: ReportModel, letterhead: LetterheadConfig = DEFAULT_LETTERHEAD) -> bytes`,
 and thread `letterhead` into the two internal calls it makes:
 `_letterhead(doc, letterhead)` (replacing its use of the old
@@ -565,10 +615,24 @@ git commit -m "feat: make quarterly-report letterhead configurable"
 **Files:**
 - Modify: `terraform/variables.tf` (root — add 10 new variables)
 - Modify: `terraform/main.tf` (3 module blocks — pass the new variables through)
-- Modify: `terraform/modules/search_api/variables.tf`, `.../main.tf:346` and `:391` (both Lambda environment blocks — main search function and `ab_runner`)
-- Modify: `terraform/modules/aml_export/variables.tf`, `.../main.tf:115`
-- Modify: `terraform/modules/quarterly_report/variables.tf`, `.../main.tf:114`
-- Cleanup (comment-only): remove "HT owns this field" / "per Nicole 2026-08-06" from `terraform/modules/quarterly_report/variables.tf`
+- Modify: `terraform/modules/search_api/variables.tf`, `.../main.tf:344` and `:389` (both Lambda environment blocks — main search function and `ab_runner`)
+- Modify: `terraform/modules/aml_export/variables.tf`, `.../main.tf:113`
+- Modify: `terraform/modules/quarterly_report/variables.tf`, `.../main.tf:112`
+- Cleanup (comment-only, see Ruling below): bare "Nicole"/"HT" attributions in
+  `terraform/modules/quarterly_report/variables.tf`, `terraform/main.tf:132,135`,
+  and `terraform/modules/quarterly_report/main.tf:75,121,125`
+
+**Ruling:** the spec only names `quality.py`/`export.py` for the bare-name
+comment cleanup, not Terraform. But Task 6 is already editing
+`quarterly_report/variables.tf` (which has the same kind of comment) and two
+more files with identical leftover "Nicole 2026-08-06" / "HT owns this
+field" phrasing — `terraform/main.tf:132,135` and
+`terraform/modules/quarterly_report/main.tf:75,121,125`. Doing one of the
+three files and not the other two would be a worse outcome than doing none,
+so this task's comment cleanup is extended to all three files found. Cost if
+this ruling is wrong (i.e., if the comment cleanup should've stayed
+spec-scoped): a few extra comment-only line changes in files already being
+touched by this task — negligible.
 
 **Interfaces:**
 - Consumes: the 10-row config table in the spec (env var name + default for each).
@@ -602,7 +666,7 @@ environment entries to the `ab_runner` Lambda's environment block
 (`:346`) — `ab_runner` runs the same synthesis pipeline and must see the same
 org configuration.
 
-- [ ] **Step 1: Make the edits** per the table above, in all five files, following the `quarterly_qualifying_practice_areas` pattern exactly. Do the comment cleanup in `quarterly_report/variables.tf` in the same pass.
+- [ ] **Step 1: Make the edits** per the table above, in all five files, following the `quarterly_qualifying_practice_areas` pattern exactly. Do the bare-name comment cleanup (per the Ruling above) across all three affected files in the same pass: drop `"(Nicole 2026-08-06)"`/`"per Nicole 2026-08-06"` parentheticals keeping the rationale, and reword `"HT owns this field in Clio"` → `"the customer owns this field in Clio"`.
 
 - [ ] **Step 2: Format and validate**
 
