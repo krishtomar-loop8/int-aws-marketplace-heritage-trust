@@ -5,6 +5,9 @@ Env:
 - ``APHRODITE_SHAREPOINT_SITES``          JSON list of granted SharePoint site URLs
 - ``APHRODITE_CRAWL_BUCKET``              S3 bucket for crawled documents
 - ``APHRODITE_CRAWL_KMS_KEY_ID``          (optional) CMK for SSE-KMS on crawled objects
+- ``APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS`` (optional) JSON list of folder names
+  to exclude at crawl time — the same variable the search API uses for its
+  defensive query-time re-check, so both layers stay in sync (default: HR/Finance)
 - ``APHRODITE_SELF_FUNCTION``             (optional) this function's name, for self-continue
 - ``APHRODITE_SHAREPOINT_KB_ID``          (optional) Knowledge Base to re-ingest after crawl
 - ``APHRODITE_SHAREPOINT_DATA_SOURCE_ID`` (optional) KB data source id to ingest
@@ -26,6 +29,7 @@ from typing import Any
 
 from backend.lambdas.sharepoint_crawler.crawl import SharePointCrawler
 from backend.lambdas.sharepoint_crawler.storage import S3CrawlStorage
+from backend.search import scoping
 from services.logging import get_logger
 
 logger = get_logger(__name__)
@@ -35,6 +39,25 @@ REGION = os.environ.get("APHRODITE_REGION", "ca-central-1")
 _DEADLINE_SAFETY_SECONDS = 90.0
 # Backstop against a runaway self-invoke chain.
 _MAX_CONTINUES = 200
+
+
+def _excluded_folders_from_env() -> frozenset[str]:
+    """Parse ``APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS`` (a JSON list, or a
+    comma-separated string as a fallback) into excluded folder names — the
+    same env var and parsing rules the search API uses, so crawl-time
+    exclusion stays in sync with query-time exclusion. A comma signals
+    genuine comma-separated intent; malformed JSON with no comma falls back
+    to the default rather than being treated as a single-item list."""
+    raw = os.environ.get("APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS", "").strip()
+    if not raw:
+        return scoping.DEFAULT_EXCLUDED_FOLDERS
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        parsed = [p.strip() for p in raw.split(",") if p.strip()] if "," in raw else None
+    if isinstance(parsed, list) and parsed:
+        return frozenset(str(v).lower() for v in parsed)
+    return scoping.DEFAULT_EXCLUDED_FOLDERS
 
 
 def handler(event: dict[str, Any] | None = None, context: Any = None) -> dict[str, Any]:
@@ -57,7 +80,9 @@ def handler(event: dict[str, Any] | None = None, context: Any = None) -> dict[st
         bucket,
         kms_key_id=os.environ.get("APHRODITE_CRAWL_KMS_KEY_ID"),
     )
-    crawler = SharePointCrawler(graph=graph, storage=storage, sites=sites)
+    crawler = SharePointCrawler(
+        graph=graph, storage=storage, sites=sites, exclude=_excluded_folders_from_env()
+    )
 
     stats = crawler.crawl(deadline=_deadline_from(context))
     logger.info("crawl complete", extra={"extra_fields": stats.as_dict()})

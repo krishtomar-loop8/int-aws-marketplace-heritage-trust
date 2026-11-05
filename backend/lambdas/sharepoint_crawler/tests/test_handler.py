@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from backend.lambdas.sharepoint_crawler import handler as h
+from backend.search import scoping
 
 
 def test_deadline_from_context_leaves_safety_margin() -> None:
@@ -66,3 +67,18 @@ def test_self_continue_respects_cap(monkeypatch) -> None:
     lam = FakeLambda()
     assert h._self_continue(FakeBoto(lam), {"continues": h._MAX_CONTINUES}) is False
     assert lam.invokes == []  # would exceed the cap → no re-invoke
+
+
+def test_excluded_folders_from_env_applies_override(monkeypatch) -> None:
+    monkeypatch.setenv("APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS", '["payroll"]')
+    assert h._excluded_folders_from_env() == frozenset({"payroll"})
+
+
+def test_excluded_folders_from_env_malformed_json_falls_back(monkeypatch) -> None:
+    monkeypatch.setenv("APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS", "{not valid json")
+    assert h._excluded_folders_from_env() == scoping.DEFAULT_EXCLUDED_FOLDERS
+
+
+def test_excluded_folders_from_env_unset_uses_default(monkeypatch) -> None:
+    monkeypatch.delenv("APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS", raising=False)
+    assert h._excluded_folders_from_env() == scoping.DEFAULT_EXCLUDED_FOLDERS
