@@ -114,6 +114,14 @@ aws lambda invoke --function-name <quarterly-report-function> \
 - `quarterly_sharepoint_upload_enabled` / `quarterly_sharepoint_upload_site` /
   `quarterly_sharepoint_upload_folder` — optional SharePoint delivery on scheduled runs
   (requires a Graph write grant on the target site).
+- `APHRODITE_LETTERHEAD_NAME` (`letterhead_name`) — organization name shown on the
+  cover-letter letterhead.
+- `APHRODITE_LETTERHEAD_ADDRESS` (`letterhead_address`) — address line shown on the
+  cover-letter letterhead.
+- `APHRODITE_LETTERHEAD_SIGNOFF` (`letterhead_signoff`) — signoff company name shown
+  on the cover letter.
+- `APHRODITE_LETTERHEAD_PRIVACY_NOTICE` (`letterhead_privacy_notice`) — privacy
+  disclosure line shown at the foot of the cover letter.
 
 **Versioning:** each quarter is a distinct key; re-generating a quarter overwrites
 its key but S3 versioning + Object Lock retain every prior generation immutably.

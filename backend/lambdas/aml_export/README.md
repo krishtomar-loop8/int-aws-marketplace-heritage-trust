@@ -67,6 +67,9 @@ Connectors are built the same way as `backend/api/handlers.py::_build_deps` (sha
 | `APHRODITE_REFERENCE_BUCKET` / `APHRODITE_AML_DESIGNATIONS_KEY` | Optional designation-list override |
 | `APHRODITE_NOTIFY_TOPIC_ARN` | SNS topic for "export ready" notifications |
 | `aml_export_schedule_enabled` | Enable the monthly EventBridge schedule (off by default) |
+| `APHRODITE_OWN_COMPANY_NAMES` (JSON list, default `["Aphrodite"]`) | Party name(s) excluded as the deployment's own company |
+| `APHRODITE_INTERNAL_TITLE_KEYWORDS` (JSON list) | Matter title/description keywords that mark a matter as internal/administrative |
+| `APHRODITE_INTERNAL_MATTER_NUMBER_PATTERN` (regex) | Matter-number pattern that marks a matter as internal/administrative |
 
 The exact workbook column layout and the own-company exclusion name are
 deployment-specific — confirm them per customer before enabling the schedule.
