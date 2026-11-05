@@ -260,3 +260,12 @@ def test_reset_config_restores_defaults():
     quality.configure(OrgConfig(own_company_names=("Acme Trust",)))
     quality.reset_config()
     assert quality.is_excluded_party_name("Aphrodite") is not None
+
+
+def test_configure_internal_title_keywords_case_insensitive():
+    # A deployer typing a natural-cased keyword must still match (the default
+    # tuple only ever worked because it happens to be hand-written lowercase).
+    quality.configure(OrgConfig(internal_title_keywords=("Finance & Compliance",)))
+    assert quality.exclusion_reason(
+        matter_number="1", description="", title="Finance & Compliance", status="open"
+    ) == "Internal / administrative matter"

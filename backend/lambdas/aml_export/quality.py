@@ -85,7 +85,7 @@ def exclusion_reason(
     num = str(matter_number or "")
     internal_number_re = re.compile(_CONFIG.internal_number_pattern)
     if internal_number_re.match(num) or any(
-        k in haystack for k in _CONFIG.internal_title_keywords
+        k.lower() in haystack for k in _CONFIG.internal_title_keywords
     ):
         return "Internal / administrative matter"
     return None

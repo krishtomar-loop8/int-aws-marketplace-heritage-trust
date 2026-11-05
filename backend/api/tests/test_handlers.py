@@ -435,6 +435,8 @@ def test_aml_schedule_get_and_put(monkeypatch: pytest.MonkeyPatch) -> None:
     assert body["hour"] == 9
 
 
-def test_excluded_folders_from_env_malformed_json_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_excluded_folders_from_env_malformed_json_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS", "{not valid json")
     assert handlers._excluded_folders_from_env() == scoping.DEFAULT_EXCLUDED_FOLDERS
