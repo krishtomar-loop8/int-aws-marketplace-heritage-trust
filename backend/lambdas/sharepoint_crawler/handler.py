@@ -8,7 +8,8 @@ Env:
 - ``APHRODITE_SELF_FUNCTION``             (optional) this function's name, for self-continue
 - ``APHRODITE_SHAREPOINT_KB_ID``          (optional) Knowledge Base to re-ingest after crawl
 - ``APHRODITE_SHAREPOINT_DATA_SOURCE_ID`` (optional) KB data source id to ingest
-- ``APHRODITE_KB_REGION``                 (optional) region the KB lives in (default APHRODITE_REGION)
+- ``APHRODITE_KB_REGION``                 (optional) region the KB lives in
+  (default APHRODITE_REGION)
 
 Large libraries can't finish in one 900s invocation, so the crawler checkpoints
 per page and stops before the deadline; this handler then **self-invokes** to

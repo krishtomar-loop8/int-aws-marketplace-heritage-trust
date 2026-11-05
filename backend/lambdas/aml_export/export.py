@@ -973,7 +973,9 @@ def _matter_level_exceptions(all_parties: list[dict[str, Any]]) -> list[dict[str
         elif cross == "clio_only":
             issues.append("Present in Clio only — no Estateably file (verify coverage)")
         if p.get("not_on_designation_list"):
-            issues.append("Matter not on Aphrodite designation list — confirm it should be screened")
+            issues.append(
+                "Matter not on Aphrodite designation list — confirm it should be screened"
+            )
         for issue in issues:
             out.append(
                 {

@@ -1,8 +1,6 @@
 # Local working notes / scratch — never committed
 .scratch/
 
-# Documentation — kept local for now
-docs/
 
 # Terraform
 .terraform/

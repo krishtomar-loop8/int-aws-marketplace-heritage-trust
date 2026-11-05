@@ -191,7 +191,8 @@ def _build_delivery(secrets: Any) -> SharePointDelivery | None:
     A setup failure (bad site/folder, missing write grant) must never break S3
     generation, so it degrades to S3-only with a logged warning.
     """
-    if os.environ.get("APHRODITE_SP_UPLOAD_ENABLED", "").strip().lower() not in ("1", "true", "yes"):
+    enabled = os.environ.get("APHRODITE_SP_UPLOAD_ENABLED", "").strip().lower()
+    if enabled not in ("1", "true", "yes"):
         return None
     try:
         from backend.connectors.graph.publisher import SharePointPublisher
