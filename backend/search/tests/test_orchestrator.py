@@ -1042,6 +1042,32 @@ def test_collect_sharepoint_excludes_hr_finance_defensively() -> None:
     assert "1 HR/Finance excluded" in " ".join(d.sources_reviewed)
 
 
+def test_dossier_builder_uses_custom_excluded_folders() -> None:
+    # "payroll" isn't in the default HR/Finance exclusion set — this proves the
+    # override, not just the default, is what's doing the excluding.
+    cand = MatterCandidate(
+        name="Estate of John Smith",
+        refs=[SourceRef("clio", "123", "Smith")],
+        matter_type="estate",
+    )
+    kb = FakeKB(
+        [
+            _kbhit(
+                "John Smith matter doc.",
+                "will.pdf",
+                web_url="https://x/sites/DataA/Matters/Smith/will.pdf",
+            ),
+            _kbhit("Payroll.", "pay.xlsx", web_url="https://x/sites/DataA/Payroll/2026/pay.xlsx"),
+        ]
+    )
+    d = DossierBuilder(
+        knowledge_base=kb, excluded_sharepoint_folders=frozenset({"payroll"})
+    ).build(cand, correspondence_term="smith")
+
+    docs = d.section("documents").items
+    assert len(docs) == 1 and "will.pdf" in docs[0].summary  # the Payroll doc is dropped
+
+
 def test_collect_sharepoint_excludes_off_matter_documents() -> None:
     # The firm-wide index returns another client's document; it must be dropped
     # (confidentiality) — it carries neither this matter's number nor client name.

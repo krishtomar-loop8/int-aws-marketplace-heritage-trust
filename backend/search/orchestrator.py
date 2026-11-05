@@ -44,7 +44,7 @@ from backend.search.deeplinks import (
     quickbooks_customer_url,
 )
 from backend.search.resolve import MatterCandidate, _normalize
-from backend.search.scoping import belongs_to_matter, is_excluded
+from backend.search.scoping import DEFAULT_EXCLUDED_FOLDERS, belongs_to_matter, is_excluded
 from services.http import HttpError
 from services.logging import get_logger
 
@@ -909,11 +909,13 @@ class DossierBuilder:
         # One worker per source so none queues behind the others (there are up to
         # 5: Estateably, Clio, QuickBooks, Outlook, SharePoint). They're I/O-bound.
         max_workers: int = 8,
+        excluded_sharepoint_folders: frozenset[str] = DEFAULT_EXCLUDED_FOLDERS,
     ) -> None:
         self._estateably = estateably
         self._clio = clio
         self._quickbooks = quickbooks
         self._graph = graph
+        self._excluded_sharepoint_folders = excluded_sharepoint_folders
         # Bedrock Knowledge Base client for SharePoint documents (full-body index).
         # None ⇒ SharePoint is skipped (e.g. before the index is provisioned).
         self._knowledge_base = knowledge_base
@@ -1724,7 +1726,9 @@ class DossierBuilder:
             web_url = r.web_url
             # Crawl-time exclusion is primary; re-check the path here in case any
             # HR/Finance document was indexed before the filter applied.
-            if web_url and is_excluded({"webUrl": web_url}):
+            if web_url and is_excluded(
+                {"webUrl": web_url}, exclude=self._excluded_sharepoint_folders
+            ):
                 excluded += 1
                 continue
             name = r.name or (web_url or r.uri or "document").rstrip("/").rsplit("/", 1)[-1]

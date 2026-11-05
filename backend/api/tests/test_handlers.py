@@ -9,6 +9,7 @@ import pytest
 
 from backend.api import handlers
 from backend.api.jobs import InMemoryJobStore
+from backend.search import scoping
 
 
 class FakeResolver:
@@ -432,3 +433,8 @@ def test_aml_schedule_get_and_put(monkeypatch: pytest.MonkeyPatch) -> None:
     assert body["enabled"] is True
     assert body["day_of_month"] == 5
     assert body["hour"] == 9
+
+
+def test_excluded_folders_from_env_malformed_json_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS", "{not valid json")
+    assert handlers._excluded_folders_from_env() == scoping.DEFAULT_EXCLUDED_FOLDERS

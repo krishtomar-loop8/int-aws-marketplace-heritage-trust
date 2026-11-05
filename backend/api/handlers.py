@@ -33,6 +33,7 @@ from backend.api.matters import MattersService, QuarterlyTrigger
 from backend.api.pipeline import run_resolve, run_search
 from backend.api.reports import ReportAccessError, ReportsService
 from backend.api.screener import ScreenerAccessError, ScreenerError, ScreenerService
+from backend.search import scoping
 from backend.search.framework import DEFAULT_ORG_NAME, DEFAULT_ORG_OFFICE_ADDRESS
 from backend.search.orchestrator import DossierBuilder
 from backend.search.quick_answers import QuickAnswerService
@@ -43,6 +44,26 @@ from services.logging import get_logger
 logger = get_logger(__name__)
 
 REGION = os.environ.get("APHRODITE_REGION", "ca-central-1")
+
+
+def _excluded_folders_from_env() -> frozenset[str]:
+    """Parse ``APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS`` (a JSON list, or a
+    comma-separated string as a fallback) into excluded folder names.
+
+    A comma signals genuine comma-separated intent; malformed JSON with no
+    comma (e.g. a truncated/garbled value) falls back to the default rather
+    than being treated as a single-item list of garbage.
+    """
+    raw = os.environ.get("APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS", "").strip()
+    if not raw:
+        return scoping.DEFAULT_EXCLUDED_FOLDERS
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        parsed = [p.strip() for p in raw.split(",") if p.strip()] if "," in raw else None
+    if isinstance(parsed, list) and parsed:
+        return frozenset(str(v).lower() for v in parsed)
+    return scoping.DEFAULT_EXCLUDED_FOLDERS
 
 
 @dataclass
@@ -103,6 +124,7 @@ def _build_deps(*, model_id: str | None = None) -> Deps:
         graph=graph,
         quickbooks=quickbooks,
         knowledge_base=knowledge_base,
+        excluded_sharepoint_folders=_excluded_folders_from_env(),
     )
     # Big matters generate a long JSON answer (+ a one-shot retry at up to
     # RETRY_MAX_TOKENS); give Bedrock room to finish well inside the Lambda's
