@@ -1,6 +1,10 @@
 # Local working notes / scratch — never committed
 .scratch/
 
+# superpowers: isolated worktrees + per-plan ledgers/workspaces
+.worktrees/
+.superpowers/
+
 
 # Terraform
 .terraform/
