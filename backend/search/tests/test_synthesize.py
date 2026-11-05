@@ -93,6 +93,14 @@ def test_uses_cached_framework_prefix_and_includes_dossier() -> None:
     assert '"record_id":"9"' in call["prompt"] or '"9"' in call["prompt"]
 
 
+def test_synthesizer_uses_custom_org_config() -> None:
+    llm = FakeLLM(good_reply())
+    synth = MatterSynthesizer(llm, org_name="Acme Trust", office_address="1 Main St")
+    synth.synthesize(make_dossier(), "status?")
+    assert "Acme Trust" in llm.calls[0]["cache_system"]
+    assert "Aphrodite" not in llm.calls[0]["cache_system"]
+
+
 def test_framework_carries_the_fidelity_and_tax_rules() -> None:
     # Canaries for the feedback-round-2 hardening: these rules were added after
     # real client-reported failures — an accidental edit that drops one should

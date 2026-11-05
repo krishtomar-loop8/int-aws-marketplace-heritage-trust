@@ -33,6 +33,7 @@ from backend.api.matters import MattersService, QuarterlyTrigger
 from backend.api.pipeline import run_resolve, run_search
 from backend.api.reports import ReportAccessError, ReportsService
 from backend.api.screener import ScreenerAccessError, ScreenerError, ScreenerService
+from backend.search.framework import DEFAULT_ORG_NAME, DEFAULT_ORG_OFFICE_ADDRESS
 from backend.search.orchestrator import DossierBuilder
 from backend.search.quick_answers import QuickAnswerService
 from backend.search.resolve import MatterResolver
@@ -109,7 +110,13 @@ def _build_deps(*, model_id: str | None = None) -> Deps:
     # timeout mid-generation. Sized for DEFAULT_MAX_TOKENS=22000 at the observed
     # worst-case ~28-33ms/output-token rate (~650-720s) with margin to spare for
     # fan-out/build ahead of it and a possible retry decision after it.
-    synthesizer = MatterSynthesizer(BedrockLLM(model_id=model_id, read_timeout=650))
+    org_name = os.environ.get("APHRODITE_ORG_NAME", DEFAULT_ORG_NAME)
+    office_address = os.environ.get("APHRODITE_ORG_OFFICE_ADDRESS", DEFAULT_ORG_OFFICE_ADDRESS)
+    synthesizer = MatterSynthesizer(
+        BedrockLLM(model_id=model_id, read_timeout=650),
+        org_name=org_name,
+        office_address=office_address,
+    )
     # Tier-0 quick answers reuse the same connectors (no LLM).
     quick = QuickAnswerService(estateably=estateably, clio=clio, graph=graph, quickbooks=quickbooks)
     store = DynamoDbJobStore(os.environ["APHRODITE_JOBS_TABLE"])

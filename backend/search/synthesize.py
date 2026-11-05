@@ -19,7 +19,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from backend.search.framework import SECTION_KEYS, render_framework
+from backend.search.framework import (
+    DEFAULT_ORG_NAME,
+    DEFAULT_ORG_OFFICE_ADDRESS,
+    SECTION_KEYS,
+    render_framework,
+)
 from backend.search.orchestrator import DossierItem, MatterDossier
 from services.logging import get_logger
 
@@ -221,9 +226,17 @@ def _as_str_list(value: Any) -> list[str]:
 class MatterSynthesizer:
     """Produce the 12-section, source-cited summary from a dossier."""
 
-    def __init__(self, llm: Any, *, max_tokens: int = DEFAULT_MAX_TOKENS) -> None:
+    def __init__(
+        self,
+        llm: Any,
+        *,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        org_name: str = DEFAULT_ORG_NAME,
+        office_address: str = DEFAULT_ORG_OFFICE_ADDRESS,
+    ) -> None:
         self._llm = llm
         self._max_tokens = max_tokens
+        self._framework = render_framework(org_name, office_address)
 
     def synthesize(
         self,
@@ -234,7 +247,7 @@ class MatterSynthesizer:
     ) -> SynthesisResult:
         prompt = self._build_prompt(dossier, query)
         result = self._llm.synthesize(
-            prompt, cache_system=render_framework(), max_tokens=self._max_tokens
+            prompt, cache_system=self._framework, max_tokens=self._max_tokens
         )
         parsed, parse_ok = _parse_json(result.text)
 
@@ -260,7 +273,7 @@ class MatterSynthesizer:
                 },
             )
             result = self._llm.synthesize(
-                prompt, cache_system=render_framework(), max_tokens=retry_tokens
+                prompt, cache_system=self._framework, max_tokens=retry_tokens
             )
             parsed, parse_ok = _parse_json(result.text)
             retried = True
