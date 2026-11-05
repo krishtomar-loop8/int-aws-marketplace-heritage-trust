@@ -1,7 +1,7 @@
 # SharePoint document Knowledge Base (full-body RAG) for the matter-search agent.
 #
-# App-only content *search* is blocked on HT's legacy NetDocs libraries, but app-
-# only *reading* works. So a scheduled crawler copies documents to an S3 bucket
+# App-only content *search* is unreliable on some legacy document libraries, but
+# app-only *reading* works. So a scheduled crawler copies documents to an S3 bucket
 # and a Bedrock Knowledge Base indexes their full body text into an S3 Vectors
 # store (cheapest vector store; GA in ca-central-1 → data stays in Canada). The
 # search Lambda then runs a semantic Retrieve at query time.
@@ -142,7 +142,7 @@ resource "aws_iam_role_policy" "kb" {
 resource "aws_bedrockagent_knowledge_base" "docs" {
   name        = "aphrodite-sharepoint"
   role_arn    = aws_iam_role.kb.arn
-  description = "HT SharePoint documents (full body text) for matter-search retrieval."
+  description = "SharePoint documents (full body text) for matter-search retrieval."
 
   knowledge_base_configuration {
     type = "VECTOR"
@@ -279,14 +279,15 @@ resource "aws_lambda_function" "crawler" {
 
   environment {
     variables = {
-      APHRODITE_REGION                    = var.aws_region
-      APHRODITE_KB_REGION                 = var.aws_region
-      APHRODITE_SHAREPOINT_SITES          = jsonencode(var.sharepoint_sites)
-      APHRODITE_CRAWL_BUCKET              = aws_s3_bucket.crawl.bucket
-      APHRODITE_CRAWL_KMS_KEY_ID          = var.kms_key_arn
-      APHRODITE_SELF_FUNCTION             = local.crawler_function_name
-      APHRODITE_SHAREPOINT_KB_ID          = aws_bedrockagent_knowledge_base.docs.id
-      APHRODITE_SHAREPOINT_DATA_SOURCE_ID = aws_bedrockagent_data_source.crawl.data_source_id
+      APHRODITE_REGION                      = var.aws_region
+      APHRODITE_KB_REGION                   = var.aws_region
+      APHRODITE_SHAREPOINT_SITES            = jsonencode(var.sharepoint_sites)
+      APHRODITE_CRAWL_BUCKET                = aws_s3_bucket.crawl.bucket
+      APHRODITE_CRAWL_KMS_KEY_ID            = var.kms_key_arn
+      APHRODITE_SELF_FUNCTION               = local.crawler_function_name
+      APHRODITE_SHAREPOINT_KB_ID            = aws_bedrockagent_knowledge_base.docs.id
+      APHRODITE_SHAREPOINT_DATA_SOURCE_ID   = aws_bedrockagent_data_source.crawl.data_source_id
+      APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS = jsonencode(var.excluded_sharepoint_folders)
     }
   }
 

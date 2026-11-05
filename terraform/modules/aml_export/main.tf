@@ -112,13 +112,16 @@ resource "aws_lambda_function" "aml_export" {
 
   environment {
     variables = {
-      APHRODITE_REGION               = var.aws_region
-      APHRODITE_OUTPUTS_BUCKET       = var.outputs_bucket
-      APHRODITE_OUTPUTS_KMS_KEY_ID   = var.kms_key_arn
-      APHRODITE_AML_EXPORT_PREFIX    = "aml"
-      APHRODITE_NOTIFY_TOPIC_ARN     = aws_sns_topic.notify.arn
-      APHRODITE_REFERENCE_BUCKET     = var.reference_bucket
-      APHRODITE_AML_DESIGNATIONS_KEY = "config/designations.xlsx"
+      APHRODITE_REGION                         = var.aws_region
+      APHRODITE_OUTPUTS_BUCKET                 = var.outputs_bucket
+      APHRODITE_OUTPUTS_KMS_KEY_ID             = var.kms_key_arn
+      APHRODITE_AML_EXPORT_PREFIX              = "aml"
+      APHRODITE_NOTIFY_TOPIC_ARN               = aws_sns_topic.notify.arn
+      APHRODITE_REFERENCE_BUCKET               = var.reference_bucket
+      APHRODITE_AML_DESIGNATIONS_KEY           = "config/designations.xlsx"
+      APHRODITE_OWN_COMPANY_NAMES              = jsonencode(var.own_company_names)
+      APHRODITE_INTERNAL_TITLE_KEYWORDS        = jsonencode(var.internal_title_keywords)
+      APHRODITE_INTERNAL_MATTER_NUMBER_PATTERN = var.internal_matter_number_pattern
     }
   }
 
@@ -156,9 +159,9 @@ resource "aws_iam_role_policy" "scheduler" {
   })
 }
 
-# Fires at midnight on the 1st of each month. Disabled by default until HT
-# confirms the "active" definition and exact column format (README Open Items
-# #4, #6) — the Lambda can be invoked manually for the pilot in the meantime.
+# Fires at midnight on the 1st of each month. Disabled by default until the
+# "active" definition and exact column format are confirmed per deployment —
+# the Lambda can be invoked manually for the pilot in the meantime.
 resource "aws_scheduler_schedule" "aml_export" {
   name       = "aphrodite-aml-export"
   group_name = "default"

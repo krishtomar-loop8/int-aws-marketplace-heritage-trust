@@ -53,3 +53,9 @@ variable "schedule_timezone" {
   default     = "America/Vancouver"
   description = "Timezone for the crawl schedule."
 }
+
+variable "excluded_sharepoint_folders" {
+  type        = list(string)
+  default     = ["hr", "human resources", "finance"]
+  description = "SharePoint folder names excluded from the crawl (and the search API's matching exclusion). Case-insensitive."
+}

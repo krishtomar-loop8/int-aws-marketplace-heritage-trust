@@ -343,18 +343,21 @@ resource "aws_lambda_function" "search" {
 
   environment {
     variables = {
-      APHRODITE_REGION                   = var.aws_region
-      APHRODITE_JOBS_TABLE               = aws_dynamodb_table.jobs.name
-      APHRODITE_ACTIVITY_TABLE           = aws_dynamodb_table.activity.name
-      APHRODITE_INTEGRATION_HEALTH_TABLE = aws_dynamodb_table.integration_health.name
-      APHRODITE_SELF_FUNCTION            = local.function_name
-      APHRODITE_SHAREPOINT_KB_ID         = var.sharepoint_kb_id
-      APHRODITE_OUTPUTS_BUCKET           = var.outputs_bucket
-      APHRODITE_OUTPUTS_KMS_KEY_ID       = var.kms_key_arn
-      APHRODITE_QUARTERLY_FUNCTION       = var.quarterly_function_name
-      APHRODITE_SANCTIONS_BUCKET         = var.sanctions_bucket
-      APHRODITE_AML_EXPORT_FUNCTION      = var.aml_export_function_name
-      APHRODITE_AML_SCHEDULE_NAME        = var.aml_schedule_name
+      APHRODITE_REGION                      = var.aws_region
+      APHRODITE_JOBS_TABLE                  = aws_dynamodb_table.jobs.name
+      APHRODITE_ACTIVITY_TABLE              = aws_dynamodb_table.activity.name
+      APHRODITE_INTEGRATION_HEALTH_TABLE    = aws_dynamodb_table.integration_health.name
+      APHRODITE_SELF_FUNCTION               = local.function_name
+      APHRODITE_SHAREPOINT_KB_ID            = var.sharepoint_kb_id
+      APHRODITE_OUTPUTS_BUCKET              = var.outputs_bucket
+      APHRODITE_OUTPUTS_KMS_KEY_ID          = var.kms_key_arn
+      APHRODITE_QUARTERLY_FUNCTION          = var.quarterly_function_name
+      APHRODITE_SANCTIONS_BUCKET            = var.sanctions_bucket
+      APHRODITE_AML_EXPORT_FUNCTION         = var.aml_export_function_name
+      APHRODITE_AML_SCHEDULE_NAME           = var.aml_schedule_name
+      APHRODITE_ORG_NAME                    = var.org_name
+      APHRODITE_ORG_OFFICE_ADDRESS          = var.org_office_address
+      APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS = jsonencode(var.excluded_sharepoint_folders)
     }
   }
 
@@ -388,13 +391,16 @@ resource "aws_lambda_function" "ab_runner" {
 
   environment {
     variables = {
-      APHRODITE_REGION             = var.aws_region
-      APHRODITE_JOBS_TABLE         = aws_dynamodb_table.jobs.name
-      APHRODITE_ACTIVITY_TABLE     = aws_dynamodb_table.activity.name
-      APHRODITE_SELF_FUNCTION      = local.function_name
-      APHRODITE_SHAREPOINT_KB_ID   = var.sharepoint_kb_id
-      APHRODITE_OUTPUTS_BUCKET     = var.outputs_bucket
-      APHRODITE_OUTPUTS_KMS_KEY_ID = var.kms_key_arn
+      APHRODITE_REGION                      = var.aws_region
+      APHRODITE_JOBS_TABLE                  = aws_dynamodb_table.jobs.name
+      APHRODITE_ACTIVITY_TABLE              = aws_dynamodb_table.activity.name
+      APHRODITE_SELF_FUNCTION               = local.function_name
+      APHRODITE_SHAREPOINT_KB_ID            = var.sharepoint_kb_id
+      APHRODITE_OUTPUTS_BUCKET              = var.outputs_bucket
+      APHRODITE_OUTPUTS_KMS_KEY_ID          = var.kms_key_arn
+      APHRODITE_ORG_NAME                    = var.org_name
+      APHRODITE_ORG_OFFICE_ADDRESS          = var.org_office_address
+      APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS = jsonencode(var.excluded_sharepoint_folders)
     }
   }
 

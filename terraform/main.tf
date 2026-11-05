@@ -75,8 +75,8 @@ module "search_api" {
   aml_schedule_arn         = module.aml_export.schedule_arn
   aml_scheduler_role_arn   = module.aml_export.scheduler_role_arn
   # SharePoint documents are served from a Bedrock Knowledge Base (full-body index
-  # built by the crawler) — app-only live search is blocked on HT's legacy NetDocs
-  # libraries, so we index + retrieve instead. See module.sharepoint_kb.
+  # built by the crawler) — app-only live search is unreliable on some legacy
+  # document libraries, so we index + retrieve instead. See module.sharepoint_kb.
   sharepoint_kb_id  = module.sharepoint_kb.knowledge_base_id
   sharepoint_kb_arn = module.sharepoint_kb.knowledge_base_arn
   # Sanction Screener reads the watchlist bundle from the reference bucket and
@@ -87,6 +87,10 @@ module "search_api" {
   health_schedule_enabled = var.integration_health_schedule_enabled
   # Temporary A/B model-measurement Lambda (off by default).
   ab_runner_enabled = var.ab_runner_enabled
+  # Per-deployment org identity + SharePoint folder exclusions.
+  org_name                    = var.org_name
+  org_office_address          = var.org_office_address
+  excluded_sharepoint_folders = var.excluded_sharepoint_folders
 }
 
 # Phase 2+ (D3): SharePoint document Knowledge Base — a scheduled crawler copies
@@ -96,13 +100,14 @@ module "search_api" {
 # Lambda retrieves semantically at query time. Crawl schedule off until the site
 # set is confirmed. See backend/lambdas/sharepoint_crawler.
 module "sharepoint_kb" {
-  source           = "./modules/sharepoint_kb"
-  aws_region       = var.aws_region
-  source_dir       = "${path.root}/build/lambda"
-  graph_secret_arn = module.secrets.secret_arns["graph"]
-  kms_key_arn      = module.kms.secrets_key_arn
-  sharepoint_sites = var.sharepoint_sites
-  schedule_enabled = var.sharepoint_crawl_schedule_enabled
+  source                      = "./modules/sharepoint_kb"
+  aws_region                  = var.aws_region
+  source_dir                  = "${path.root}/build/lambda"
+  graph_secret_arn            = module.secrets.secret_arns["graph"]
+  kms_key_arn                 = module.kms.secrets_key_arn
+  sharepoint_sites            = var.sharepoint_sites
+  schedule_enabled            = var.sharepoint_crawl_schedule_enabled
+  excluded_sharepoint_folders = var.excluded_sharepoint_folders
 }
 
 # Phase 4 (D7): immutable outputs bucket for generated artifacts. Used by the
@@ -129,15 +134,20 @@ module "quarterly_report" {
   matter_ids           = var.quarterly_matter_ids
   notify_emails        = var.quarterly_notify_emails
   schedule_enabled     = var.quarterly_schedule_enabled
-  # Practice-area discovery for scheduled runs (Nicole 2026-08-06).
+  # Practice-area discovery for scheduled runs.
   qualifying_practice_areas = var.quarterly_qualifying_practice_areas
   exclusion_field           = var.quarterly_exclusion_field
-  # Address beneficiaries from Estateably (Nicole 2026-08-06).
+  # Address beneficiaries from Estateably.
   beneficiary_emails_enabled = var.quarterly_beneficiary_emails_enabled
   # SharePoint delivery on scheduled runs (off until the Graph write grant lands).
   sharepoint_upload_enabled = var.quarterly_sharepoint_upload_enabled
   sharepoint_upload_site    = var.quarterly_sharepoint_upload_site
   sharepoint_upload_folder  = var.quarterly_sharepoint_upload_folder
+  # Per-deployment letterhead.
+  letterhead_name           = var.letterhead_name
+  letterhead_address        = var.letterhead_address
+  letterhead_signoff        = var.letterhead_signoff
+  letterhead_privacy_notice = var.letterhead_privacy_notice
 }
 
 # Phase 3 (D6): Monthly AML Name Export — scheduled Lambda that compiles the
@@ -156,11 +166,15 @@ module "aml_export" {
   reference_bucket_arn = module.reference_bucket.bucket_arn
   notify_emails        = var.aml_export_notify_emails
   schedule_enabled     = var.aml_export_schedule_enabled
+  # Per-deployment own-company and internal-matter filters.
+  own_company_names              = var.own_company_names
+  internal_title_keywords        = var.internal_title_keywords
+  internal_matter_number_pattern = var.internal_matter_number_pattern
 }
 
-# Sanction Screener companion — brings HT's custom screening tool (originally
-# contracted to WorkSmarter) in-house as its replacement; the old hosted URL is
-# dead. A mutable reference bucket holds the watchlist bundle, refreshed monthly
+# Sanction Screener companion — the customer's own screening tool (originally
+# contracted to an outside vendor) brought in-house as its replacement. A
+# mutable reference bucket holds the watchlist bundle, refreshed monthly
 # from the public UN/SEMA/Public-Safety sources by the sanctions-refresh Lambda;
 # the search API Lambda reads it to screen uploaded name lists and writes
 # Certificates of Search to the outputs bucket. Never calls Bedrock.

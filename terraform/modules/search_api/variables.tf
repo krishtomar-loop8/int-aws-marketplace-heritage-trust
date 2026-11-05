@@ -126,3 +126,21 @@ variable "ab_runner_enabled" {
     deployed synthesis model.
   EOT
 }
+
+variable "org_name" {
+  type        = string
+  default     = "Aphrodite"
+  description = "Deployment's organization display name, used in the matter-search system prompt."
+}
+
+variable "org_office_address" {
+  type        = string
+  default     = "545 Clyde Avenue, West Vancouver"
+  description = "Deployment's office address, used by the matter-search system prompt's care-of/mailing-address rule."
+}
+
+variable "excluded_sharepoint_folders" {
+  type        = list(string)
+  default     = ["hr", "human resources", "finance"]
+  description = "SharePoint folder names excluded from search results. Case-insensitive."
+}

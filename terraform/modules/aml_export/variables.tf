@@ -66,3 +66,33 @@ variable "schedule_timezone" {
   default     = "America/Vancouver"
   description = "Timezone for the schedule (Aphrodite is in BC)."
 }
+
+variable "own_company_names" {
+  type        = list(string)
+  default     = ["Aphrodite"]
+  description = "Party name(s) treated as the deployment's own company and excluded from AML screening (matched as a name prefix)."
+}
+
+variable "internal_title_keywords" {
+  type = list(string)
+  default = [
+    "accounting",
+    "bcfsa communication",
+    "finance & compliance",
+    "finance and compliance",
+    "board of directors",
+    "wills bank",
+    "suspense",
+    "natalie's files",
+    "natalies files",
+    "aphrodite - administration",
+    "aphrodite administration",
+  ]
+  description = "Matter title/description keywords (case-insensitive) that mark a matter as internal/administrative, excluded from AML screening."
+}
+
+variable "internal_matter_number_pattern" {
+  type        = string
+  default     = "^\\s*(2100-\\d+|999999)\\b"
+  description = "Regex matching matter numbers that are internal/administrative, excluded from AML screening."
+}

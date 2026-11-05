@@ -72,7 +72,7 @@ data "aws_iam_policy_document" "exec" {
     actions   = ["s3:PutObject"]
     resources = ["${var.outputs_bucket_arn}/quarterly/*"]
   }
-  # Read the staff-editable account-classification config sheet (Nicole's Decision A).
+  # Read the staff-editable account-classification config sheet.
   statement {
     sid       = "ReadClassification"
     actions   = ["s3:GetObject"]
@@ -118,18 +118,22 @@ resource "aws_lambda_function" "quarterly" {
       APHRODITE_NOTIFY_TOPIC_ARN           = aws_sns_topic.notify.arn
       APHRODITE_REFERENCE_BUCKET           = var.reference_bucket
       APHRODITE_ACCOUNT_CLASSIFICATION_KEY = "config/account_classification.xlsx"
-      # Practice-area discovery for scheduled runs (Nicole 2026-08-06): qualifying
-      # categories + the "Report Exclusion" checkbox that omits ticked matters.
+      # Practice-area discovery for scheduled runs: qualifying categories + the
+      # "Report Exclusion" checkbox that omits ticked matters.
       APHRODITE_QUARTERLY_QUALIFYING_PRACTICE_AREAS = jsonencode(var.qualifying_practice_areas)
       APHRODITE_QUARTERLY_EXCLUSION_FIELD           = var.exclusion_field
-      # Address the letter to Estateably beneficiaries (Nicole 2026-08-06); off ⇒
-      # address the Clio client contact (legacy behavior).
+      # Address the letter to Estateably beneficiaries; off ⇒ address the Clio
+      # client contact (legacy behavior).
       APHRODITE_QUARTERLY_BENEFICIARY_EMAILS = var.beneficiary_emails_enabled ? "true" : "false"
       # SharePoint delivery (scheduled runs only). Off unless a site is configured.
       APHRODITE_SP_UPLOAD_ENABLED              = var.sharepoint_upload_enabled ? "true" : "false"
       APHRODITE_SP_UPLOAD_SITE                 = var.sharepoint_upload_site
       APHRODITE_SP_UPLOAD_FOLDER               = var.sharepoint_upload_folder
       APHRODITE_QUARTERLY_MATTER_DELAY_SECONDS = tostring(var.matter_delay_seconds)
+      APHRODITE_LETTERHEAD_NAME                = var.letterhead_name
+      APHRODITE_LETTERHEAD_ADDRESS             = var.letterhead_address
+      APHRODITE_LETTERHEAD_SIGNOFF             = var.letterhead_signoff
+      APHRODITE_LETTERHEAD_PRIVACY_NOTICE      = var.letterhead_privacy_notice
     }
   }
 
@@ -168,8 +172,8 @@ resource "aws_iam_role_policy" "scheduler" {
 }
 
 # Fires a few weeks after each quarter end (books settled), matching the sample's
-# mid-quarter-after send. Disabled by default until HT confirms the matter set /
-# calendar — the Lambda can be invoked manually for the pilot in the meantime.
+# mid-quarter-after send. Disabled by default until the matter set / calendar is
+# confirmed — the Lambda can be invoked manually for the pilot in the meantime.
 resource "aws_scheduler_schedule" "quarterly" {
   name       = "aphrodite-quarterly-report"
   group_name = "default"

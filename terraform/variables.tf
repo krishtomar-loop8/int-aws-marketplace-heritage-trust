@@ -49,7 +49,7 @@ variable "quarterly_matter_ids" {
   description = <<-EOT
     Default matter set for scheduled quarterly report runs. Empty ⇒ the scheduled
     run is a no-op (safe default); a manual invoke can still pass matter_ids for
-    the pilot. Set once HT confirms which matters get quarterly statements.
+    the pilot. Set once the matter set for quarterly statements is confirmed.
   EOT
 }
 
@@ -144,4 +144,78 @@ variable "ab_runner_enabled" {
   type        = bool
   default     = false
   description = "Create the temporary A/B model-measurement Lambda. Off by default; flip on to run the model comparison, then off again."
+}
+
+# -- Phase 1: per-deployment business-config knobs (Marketplace readiness) --
+
+variable "org_name" {
+  type        = string
+  default     = "Aphrodite"
+  description = "Deployment's organization display name, used in the matter-search system prompt and the AML own-company exclusion check."
+}
+
+variable "org_office_address" {
+  type        = string
+  default     = "545 Clyde Avenue, West Vancouver"
+  description = "Deployment's office address, used by the matter-search system prompt's care-of/mailing-address rule."
+}
+
+variable "excluded_sharepoint_folders" {
+  type        = list(string)
+  default     = ["hr", "human resources", "finance"]
+  description = "SharePoint folder names excluded from search results and from the crawler's index. Case-insensitive."
+}
+
+variable "own_company_names" {
+  type        = list(string)
+  default     = ["Aphrodite"]
+  description = "Party name(s) treated as the deployment's own company and excluded from AML screening (matched as a name prefix)."
+}
+
+variable "internal_title_keywords" {
+  type = list(string)
+  default = [
+    "accounting",
+    "bcfsa communication",
+    "finance & compliance",
+    "finance and compliance",
+    "board of directors",
+    "wills bank",
+    "suspense",
+    "natalie's files",
+    "natalies files",
+    "aphrodite - administration",
+    "aphrodite administration",
+  ]
+  description = "Matter title/description keywords (case-insensitive) that mark a matter as internal/administrative, excluded from AML screening."
+}
+
+variable "internal_matter_number_pattern" {
+  type        = string
+  default     = "^\\s*(2100-\\d+|999999)\\b"
+  description = "Regex matching matter numbers that are internal/administrative, excluded from AML screening."
+}
+
+variable "letterhead_name" {
+  type        = string
+  default     = "Aphrodite"
+  description = "Organization name shown on the quarterly-report letterhead."
+}
+
+variable "letterhead_address" {
+  type        = string
+  default     = "220-545 Clyde Avenue, West Vancouver, BC V7T 1C5 | 778.742.5005 | aphrodite.example"
+  description = "Address line shown on the quarterly-report letterhead."
+}
+
+variable "letterhead_signoff" {
+  type        = string
+  default     = "APHRODITE"
+  description = "Signoff company name shown on the quarterly-report cover letter."
+}
+
+variable "letterhead_privacy_notice" {
+  type        = string
+  default     = "Our privacy practices are described at www.aphrodite.example/privacy."
+  description = "Privacy disclosure line shown at the foot of the quarterly-report cover letter."
 }

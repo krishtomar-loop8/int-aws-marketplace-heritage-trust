@@ -50,7 +50,7 @@ variable "matter_ids" {
     Default matter set for scheduled runs (APHRODITE_QUARTERLY_MATTER_IDS). Empty ⇒ the
     scheduled run is a no-op; a manual invoke can still pass matter_ids. Auto-
     discovery of all trust matters is a future enhancement (confirm the Clio
-    filter with HT first).
+    filter with the customer first).
   EOT
 }
 
@@ -112,7 +112,7 @@ variable "qualifying_practice_areas" {
   default     = ["Trustee", "Committee", "Power of Attorney"]
   description = <<-EOT
     Clio practice-area names whose open matters get a quarterly statement on
-    scheduled (discover) runs (Nicole 2026-08-06). Case-insensitive.
+    scheduled (discover) runs. Case-insensitive.
   EOT
 }
 
@@ -122,8 +122,8 @@ variable "exclusion_field" {
   description = <<-EOT
     Name of the Clio "Report Exclusion" checkbox custom field. Ticked ⇒ the matter
     is omitted, even if its practice area would otherwise qualify (exclusion-only).
-    Unticked/absent ⇒ the practice-area rule applies. HT owns this field in Clio;
-    we read it by name.
+    Unticked/absent ⇒ the practice-area rule applies. The customer owns this
+    field in Clio; we read it by name.
   EOT
 }
 
@@ -132,8 +132,32 @@ variable "beneficiary_emails_enabled" {
   default     = true
   description = <<-EOT
     Address the cover letter to the matter's Estateably beneficiaries (and the
-    guardian/representative for a minor/incapable beneficiary), per Nicole
-    2026-08-06. Off ⇒ address the Clio client contact (legacy behavior). Degrades
+    guardian/representative for a minor/incapable beneficiary). Off ⇒ address
+    the Clio client contact (legacy behavior). Degrades
     to the Clio client per matter when Estateably has no matching estate.
   EOT
+}
+
+variable "letterhead_name" {
+  type        = string
+  default     = "Aphrodite"
+  description = "Organization name shown on the quarterly-report letterhead."
+}
+
+variable "letterhead_address" {
+  type        = string
+  default     = "220-545 Clyde Avenue, West Vancouver, BC V7T 1C5 | 778.742.5005 | aphrodite.example"
+  description = "Address line shown on the quarterly-report letterhead."
+}
+
+variable "letterhead_signoff" {
+  type        = string
+  default     = "APHRODITE"
+  description = "Signoff company name shown on the quarterly-report cover letter."
+}
+
+variable "letterhead_privacy_notice" {
+  type        = string
+  default     = "Our privacy practices are described at www.aphrodite.example/privacy."
+  description = "Privacy disclosure line shown at the foot of the quarterly-report cover letter."
 }
