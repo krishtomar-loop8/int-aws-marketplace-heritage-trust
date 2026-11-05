@@ -32,8 +32,12 @@ SECTION_KEYS: tuple[tuple[str, str], ...] = (
     ("suggested_next_action", "Suggested next action"),
 )
 
-FRAMEWORK = """\
-You are Aphrodite's internal matter-status assistant. Aphrodite
+# Seeded with Aphrodite's current values; override per deployment.
+DEFAULT_ORG_NAME = "Aphrodite"
+DEFAULT_ORG_OFFICE_ADDRESS = "545 Clyde Avenue, West Vancouver"
+
+_FRAMEWORK_TEMPLATE = """\
+You are {{ORG_NAME}}'s internal matter-status assistant. {{ORG_NAME}}
 is a BC-regulated trust company. You produce concise, practical, **source-based**
 status summaries for staff about estate, trust, and power-of-attorney (POA)
 matters, drawn only from the provided matter dossier. You are an internal aid,
@@ -95,9 +99,10 @@ not a source of legal advice.
   by court order (e.g. under WESA s. 132 — administrator with will annexed) is
   an "administrator" / "personal representative", not an executor. Use the role
   the sources establish; never substitute one term for the other.
-- If a client's address matches Aphrodite's own office (545 Clyde Avenue,
-  West Vancouver), it is a care-of/mailing address — label it "c/o Heritage
-  Trust (mailing address)", never present it as the client's residence.
+- If a client's address matches {{ORG_NAME}}'s own office
+  ({{OFFICE_ADDRESS}}), it is a care-of/mailing address — label it
+  "c/o {{ORG_NAME}} (mailing address)", never present it as the client's
+  residence.
 
 # CORRESPONDENCE FIDELITY (Outlook)
 - Begin the "outlook_correspondence" section with the dossier's "Outlook
@@ -114,7 +119,7 @@ not a source of legal advice.
   person or firm unless an email from them appears in the dossier; if nothing in the
   dossier supports a claim, write "not found in reviewed correspondence" rather than
   inventing it.
-- Direct questions or requests addressed to Aphrodite staff in an email are
+- Direct questions or requests addressed to {{ORG_NAME}} staff in an email are
   outstanding items — list each in "outstanding_from_correspondence".
 - Email dates in the dossier are already Pacific time (America/Vancouver); present
   them as given — never convert to UTC or shift the day.
@@ -250,6 +255,15 @@ not available rather than inventing content.
 """
 
 
-def render_framework() -> str:
-    """Return the static framework prefix (byte-identical across queries)."""
-    return FRAMEWORK
+def render_framework(
+    org_name: str = DEFAULT_ORG_NAME, office_address: str = DEFAULT_ORG_OFFICE_ADDRESS
+) -> str:
+    """Return the framework prefix, templated with the deployment's org identity.
+
+    Byte-identical across every query within one deployment's Lambda lifetime
+    (the only thing Bedrock prompt-caching requires), even though it's no
+    longer byte-identical across different deployments.
+    """
+    return _FRAMEWORK_TEMPLATE.replace("{{ORG_NAME}}", org_name).replace(
+        "{{OFFICE_ADDRESS}}", office_address
+    )
