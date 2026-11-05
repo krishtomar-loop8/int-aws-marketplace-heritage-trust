@@ -20,7 +20,7 @@ from backend.lambdas.quarterly_report.model import (
     SummaryRow,
 )
 from backend.lambdas.quarterly_report.period import ReportingPeriod
-from backend.lambdas.quarterly_report.render_docx import render_cover_letter
+from backend.lambdas.quarterly_report.render_docx import LetterheadConfig, render_cover_letter
 from backend.lambdas.quarterly_report.render_pdf import render_trust_ledger
 
 
@@ -159,6 +159,27 @@ def test_cover_letter_includes_reviewer_checklist_and_custodian_line():
 
 def test_cover_letter_includes_privacy_notice():
     text = _docx_text(render_cover_letter(_model()))
+    assert "www.aphrodite.example/privacy" in text
+
+
+def test_render_cover_letter_custom_letterhead():
+    letterhead = LetterheadConfig(
+        name="Acme Trust",
+        address="1 Main St",
+        signoff="ACME TRUST",
+        privacy_notice="See acme.example/privacy.",
+    )
+    text = _docx_text(render_cover_letter(_model(), letterhead))
+    assert "Acme Trust" in text
+    assert "1 Main St" in text
+    assert "ACME TRUST" in text
+    assert "acme.example/privacy" in text
+    assert "Aphrodite" not in text
+
+
+def test_render_cover_letter_default_letterhead_unchanged():
+    text = _docx_text(render_cover_letter(_model()))
+    assert "Aphrodite" in text
     assert "www.aphrodite.example/privacy" in text
 
 

@@ -47,7 +47,7 @@ from .classification import load_classification
 from .delivery import SharePointDelivery
 from .generator import ReportGenerator
 from .period import ReportingPeriod, previous_quarter
-from .render_docx import render_cover_letter
+from .render_docx import LetterheadConfig, render_cover_letter
 from .render_pdf import render_trust_ledger
 from .selection import MatterRow, Selection, select_matters
 from .storage import ReportStorage
@@ -55,6 +55,18 @@ from .storage import ReportStorage
 logger = get_logger(__name__)
 
 REGION = os.environ.get("APHRODITE_REGION", "ca-central-1")
+
+
+def _letterhead_from_env() -> LetterheadConfig:
+    default = LetterheadConfig()
+    return LetterheadConfig(
+        name=os.environ.get("APHRODITE_LETTERHEAD_NAME", default.name),
+        address=os.environ.get("APHRODITE_LETTERHEAD_ADDRESS", default.address),
+        signoff=os.environ.get("APHRODITE_LETTERHEAD_SIGNOFF", default.signoff),
+        privacy_notice=os.environ.get(
+            "APHRODITE_LETTERHEAD_PRIVACY_NOTICE", default.privacy_notice
+        ),
+    )
 
 
 @dataclass
@@ -70,6 +82,7 @@ class Deps:
     clio: Any = None
     qualifying_practice_areas: tuple[str, ...] = ()
     exclusion_field: str = ""
+    letterhead: LetterheadConfig = LetterheadConfig()
 
 
 _DEPS: Deps | None = None  # cold-start cache / test injection point
@@ -145,6 +158,7 @@ def _build_deps() -> Deps:
         clio=clio,
         qualifying_practice_areas=_qualifying_from_env(),
         exclusion_field=os.environ.get("APHRODITE_QUARTERLY_EXCLUSION_FIELD", "").strip(),
+        letterhead=_letterhead_from_env(),
     )
 
 
@@ -341,7 +355,7 @@ def _generate_one(
 ) -> dict[str, Any]:
     try:
         model = deps.generator.build(matter_id, period, letter_date=letter_date)
-        docx = render_cover_letter(model)
+        docx = render_cover_letter(model, deps.letterhead)
         pdf = render_trust_ledger(model)
         keys = deps.storage.put_report(model, docx, pdf, generated_at=generated_at)
         logger.info(

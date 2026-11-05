@@ -8,6 +8,7 @@ from backend.lambdas.quarterly_report import handler as H
 from backend.lambdas.quarterly_report.generator import ReportDataError
 from backend.lambdas.quarterly_report.handler import Deps
 from backend.lambdas.quarterly_report.period import ReportingPeriod
+from backend.lambdas.quarterly_report.render_docx import LetterheadConfig
 from backend.lambdas.quarterly_report.tests.test_render import _model
 
 
@@ -252,3 +253,11 @@ def test_explicit_matter_ids_bypass_discovery(monkeypatch):
 
     assert result["generated"] == ["100001"]
     assert "flagged_no_practice_area" not in result
+
+
+def test_letterhead_from_env_partial_override(monkeypatch):
+    monkeypatch.setenv("APHRODITE_LETTERHEAD_NAME", "Acme Trust")
+    monkeypatch.delenv("APHRODITE_LETTERHEAD_ADDRESS", raising=False)
+    letterhead = H._letterhead_from_env()
+    assert letterhead.name == "Acme Trust"
+    assert letterhead.address == LetterheadConfig().address  # untouched sibling field

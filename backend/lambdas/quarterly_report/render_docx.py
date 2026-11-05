@@ -13,6 +13,7 @@ testable without AWS.
 from __future__ import annotations
 
 import io
+from dataclasses import dataclass
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_COLOR_INDEX
@@ -21,21 +22,32 @@ from docx.shared import Pt
 from ._fmt import PENDING, long_date, money
 from .model import ReportModel
 
-# Aphrodite letterhead (matches the sample). The reviewer's template can
-# later swap this text header for a logo image — see the README open item.
-_LETTERHEAD_NAME = "Aphrodite"
-_LETTERHEAD_ADDRESS = (
-    "220-545 Clyde Avenue, West Vancouver, BC V7T 1C5 | 778.742.5005 | aphrodite.example"
-)
-_SIGNOFF_COMPANY = "APHRODITE"
-# Standing privacy disclosure at the foot of the letter (Nicole, 2026-08-11).
-_PRIVACY_NOTICE = "Our privacy practices are described at www.aphrodite.example/privacy."
+
+@dataclass(frozen=True)
+class LetterheadConfig:
+    """Per-deployment letterhead/signoff text for the cover letter (matches
+    the sample). Seeded with Aphrodite's current values; override per
+    deployment. The reviewer's template can later swap the text header for a
+    logo image — see the README open item."""
+
+    name: str = "Aphrodite"
+    address: str = (
+        "220-545 Clyde Avenue, West Vancouver, BC V7T 1C5 | 778.742.5005 | aphrodite.example"
+    )
+    signoff: str = "APHRODITE"
+    # Standing privacy disclosure at the foot of the letter.
+    privacy_notice: str = "Our privacy practices are described at www.aphrodite.example/privacy."
 
 
-def render_cover_letter(model: ReportModel) -> bytes:
+DEFAULT_LETTERHEAD = LetterheadConfig()
+
+
+def render_cover_letter(
+    model: ReportModel, letterhead: LetterheadConfig = DEFAULT_LETTERHEAD
+) -> bytes:
     """Build the cover-letter .docx and return it as bytes."""
     doc = Document()
-    _letterhead(doc)
+    _letterhead(doc, letterhead)
     _reply_block(doc, model)
     doc.add_paragraph(long_date(model.letter_date))
 
@@ -89,16 +101,16 @@ def render_cover_letter(model: ReportModel) -> bytes:
         "updated on the Trust's administration throughout the year."
     )
 
-    _signoff(doc, model)
+    _signoff(doc, model, letterhead)
     return _to_bytes(doc)
 
 
-def _letterhead(doc: Document) -> None:
+def _letterhead(doc: Document, letterhead: LetterheadConfig) -> None:
     name = doc.add_paragraph()
-    run = name.add_run(_LETTERHEAD_NAME)
+    run = name.add_run(letterhead.name)
     run.bold = True
     run.font.size = Pt(18)
-    addr = doc.add_paragraph(_LETTERHEAD_ADDRESS)
+    addr = doc.add_paragraph(letterhead.address)
     addr.runs[0].font.size = Pt(8)
 
 
@@ -142,20 +154,20 @@ def _highlight(run) -> None:
     run.font.highlight_color = WD_COLOR_INDEX.YELLOW
 
 
-def _signoff(doc: Document, model: ReportModel) -> None:
+def _signoff(doc: Document, model: ReportModel, letterhead: LetterheadConfig) -> None:
     doc.add_paragraph("Yours truly,")
     company = doc.add_paragraph()
-    company.add_run(_SIGNOFF_COMPANY).bold = True
+    company.add_run(letterhead.signoff).bold = True
     doc.add_paragraph("Per:")
     doc.add_paragraph(model.attorney.name)
-    doc.add_paragraph(_SIGNOFF_COMPANY)
+    doc.add_paragraph(letterhead.signoff)
     doc.add_paragraph("Encl.")
     doc.add_paragraph("cc: Client")
     tag = doc.add_paragraph(f"{{{model.matter_number}}}")
     tag.alignment = WD_ALIGN_PARAGRAPH.LEFT
     # Privacy disclosure at the foot of the letter. Added before the reviewer
     # checklist so it stays in the letter once that DRAFT block is removed.
-    privacy = doc.add_paragraph(_PRIVACY_NOTICE)
+    privacy = doc.add_paragraph(letterhead.privacy_notice)
     privacy.runs[0].font.size = Pt(8)
     _draft_checklist(doc, model)
 
