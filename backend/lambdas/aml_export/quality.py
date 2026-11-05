@@ -14,6 +14,7 @@ from __future__ import annotations
 import difflib
 import re
 import unicodedata
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
@@ -35,7 +36,31 @@ INTERNAL_TITLE_KEYWORDS = (
     "aphrodite - administration",
     "aphrodite administration",
 )
-_INTERNAL_NUMBER_RE = re.compile(r"^\s*(2100-\d+|999999)\b")
+
+
+@dataclass(frozen=True)
+class OrgConfig:
+    """Per-deployment values for the own-company exclusion and internal-matter
+    filters. Seeded with Aphrodite's current values; override per deployment."""
+
+    own_company_names: tuple[str, ...] = ("Aphrodite",)
+    internal_title_keywords: tuple[str, ...] = INTERNAL_TITLE_KEYWORDS
+    internal_number_pattern: str = r"^\s*(2100-\d+|999999)\b"
+
+
+_CONFIG = OrgConfig()
+
+
+def configure(config: OrgConfig) -> None:
+    """Set the active deployment config (called once at Lambda cold start)."""
+    global _CONFIG
+    _CONFIG = config
+
+
+def reset_config() -> None:
+    """Restore the default config (for test isolation)."""
+    global _CONFIG
+    _CONFIG = OrgConfig()
 
 
 def is_inactive_status(status: str | None) -> bool:
@@ -58,14 +83,17 @@ def exclusion_reason(
     if re.search(r"\btest\b", haystack):
         return "Test matter"
     num = str(matter_number or "")
-    if _INTERNAL_NUMBER_RE.match(num) or any(k in haystack for k in INTERNAL_TITLE_KEYWORDS):
+    internal_number_re = re.compile(_CONFIG.internal_number_pattern)
+    if internal_number_re.match(num) or any(
+        k in haystack for k in _CONFIG.internal_title_keywords
+    ):
         return "Internal / administrative matter"
     return None
 
 
 # -- role taxonomy + named / entity classification --------------------------
 
-# Aphrodite's authoritative screening taxonomy (Nicole, 2026-07-15/20). A party
+# The deployment's authoritative screening taxonomy. A party
 # whose source role does not map to one of these is NOT screened — it is routed
 # to the Excluded Parties view with a reason, and its raw role text is retained
 # in a separate ``Source Role`` column.
@@ -86,7 +114,7 @@ _CANONICAL_LOWER = {r.lower(): r for r in SCREENING_ROLES}
 # Estateably emits camelCase source labels ("accountantCpa", "realEstateAgent").
 # Whole-word rules only fire once those are split into separate tokens, so both
 # map_role and is_non_principal_role tokenize role text through _role_words —
-# keeping the mapping aligned across source labels and party types (Nicole item 1).
+# keeping the mapping aligned across source labels and party types (item 1).
 _CAMEL_RE = re.compile(r"(?<=[a-z])(?=[A-Z])")
 
 
@@ -152,22 +180,24 @@ def map_role(source_role: Any) -> str | None:
 
 
 def is_excluded_party_name(name: Any) -> str | None:
-    """Return a reason if this party is Aphrodite's own company (never screened).
+    """Return a reason if this party is the deployment's own company (never screened).
 
-    Matches only names that *start* with "Aphrodite" (the company acting as
-    executor/trustee/client), so a client trust merely containing the word does
-    not get suppressed."""
-    if normalize_text(name).lower().startswith("aphrodite"):
-        return "Aphrodite — own company, not a screened party"
+    Matches only names that *start* with a configured own-company name (the
+    company acting as executor/trustee/client), so a client trust merely
+    containing the word does not get suppressed."""
+    clean = normalize_text(name).lower()
+    for own_name in _CONFIG.own_company_names:
+        if clean.startswith(own_name.lower()):
+            return f"{own_name} — own company, not a screened party"
     return None
 
 
 # Clearly non-principal roles: advisors, service providers, and social contacts.
-# These are excluded from screening (Nicole item 2 / decision D). Anything that is
+# These are excluded from screening (item 2 / decision D). Anything that is
 # NEITHER a taxonomy role NOR clearly non-principal (generic "Client", POA
 # "Principal", "brother - representative", blank, …) is instead KEPT in the
 # screening set as "Role to be Confirmed" — a principal must never be dropped
-# because the source role is incomplete (Nicole item 3).
+# because the source role is incomplete (item 3).
 _NON_PRINCIPAL_KEYWORDS = (
     "accountant",
     "cpa",
@@ -487,6 +517,9 @@ def trust_roster_exceptions(parties: list[dict[str, Any]]) -> list[dict[str, Any
 
 
 __all__ = [
+    "OrgConfig",
+    "configure",
+    "reset_config",
     "exclusion_reason",
     "is_inactive_status",
     "normalize_text",

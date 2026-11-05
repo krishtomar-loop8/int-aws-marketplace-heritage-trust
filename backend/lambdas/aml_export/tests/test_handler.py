@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from backend.lambdas.aml_export import handler as H
+from backend.lambdas.aml_export import quality
 from backend.lambdas.aml_export.handler import Deps
 from backend.lambdas.aml_export.tests.test_export import FakeClio, FakeEstateably, _resource
 
@@ -105,3 +106,21 @@ def test_handler_ignores_event_payload(monkeypatch):
 
     assert result["bucket"] == "ht-outputs-test"
     assert len(storage.puts[0]["result"]["parties"]) == 1
+
+
+def test_org_config_from_env_malformed_json_falls_back(monkeypatch):
+    monkeypatch.setenv("APHRODITE_OWN_COMPANY_NAMES", "{not valid json")
+    monkeypatch.setenv("APHRODITE_INTERNAL_TITLE_KEYWORDS", "{not valid json")
+    config = H._org_config_from_env()
+    assert config.own_company_names == quality.OrgConfig().own_company_names
+    assert config.internal_title_keywords == quality.OrgConfig().internal_title_keywords
+
+
+def test_org_config_from_env_applies_overrides(monkeypatch):
+    monkeypatch.setenv("APHRODITE_OWN_COMPANY_NAMES", '["Acme Trust"]')
+    monkeypatch.setenv("APHRODITE_INTERNAL_MATTER_NUMBER_PATTERN", r"^\s*9999-\d+")
+    config = H._org_config_from_env()
+    assert config.own_company_names == ("Acme Trust",)
+    assert config.internal_number_pattern == r"^\s*9999-\d+"
+    # Untouched field keeps its own default.
+    assert config.internal_title_keywords == quality.OrgConfig().internal_title_keywords

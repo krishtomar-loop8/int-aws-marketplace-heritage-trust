@@ -2,7 +2,18 @@
 
 from __future__ import annotations
 
+import re
+
+import pytest
+
 from backend.lambdas.aml_export import quality
+from backend.lambdas.aml_export.quality import OrgConfig
+
+
+@pytest.fixture(autouse=True)
+def _reset_quality_config():
+    yield
+    quality.reset_config()
 
 
 def test_exclusion_reason():
@@ -205,3 +216,47 @@ def test_missing_matter_number_wording():
     }
     issues = quality._party_issues(party)
     assert any("Matter number missing" in i for i in issues)
+
+
+def test_configure_changes_own_company_match():
+    quality.configure(OrgConfig(own_company_names=("Acme Trust",)))
+    # Different casing than configured, to pin the existing case-insensitive match.
+    assert quality.is_excluded_party_name("ACME TRUST LTD.") is not None
+    assert quality.is_excluded_party_name("Aphrodite") is None
+
+
+def test_configure_invalid_regex_raises_at_call_time():
+    quality.configure(OrgConfig(internal_number_pattern="("))  # unbalanced group
+    with pytest.raises(re.error):
+        quality.exclusion_reason(matter_number="1", description="", title="", status="open")
+
+
+def test_configure_empty_own_company_excludes_nothing():
+    quality.configure(OrgConfig(own_company_names=()))
+    assert quality.is_excluded_party_name("Aphrodite") is None
+    assert quality.is_excluded_party_name("Anything") is None
+
+
+def test_configure_changes_internal_title_keywords():
+    quality.configure(OrgConfig(internal_title_keywords=("custom-internal-marker",)))
+    assert quality.exclusion_reason(
+        matter_number="1", description="", title="custom-internal-marker", status="open"
+    ) == "Internal / administrative matter"
+    assert quality.exclusion_reason(
+        matter_number="190012", description="", title="Finance & Compliance", status="open"
+    ) is None  # old default keyword no longer matches once overridden
+    # (matter_number is a normal, non-internal number here, to isolate the
+    # title-keyword override from the still-default internal number pattern.)
+
+
+def test_configure_changes_internal_number_pattern():
+    quality.configure(OrgConfig(internal_number_pattern=r"^\s*9999-\d+"))
+    assert quality.exclusion_reason(
+        matter_number="9999-1", description="", title="", status="open"
+    ) == "Internal / administrative matter"
+
+
+def test_reset_config_restores_defaults():
+    quality.configure(OrgConfig(own_company_names=("Acme Trust",)))
+    quality.reset_config()
+    assert quality.is_excluded_party_name("Aphrodite") is not None

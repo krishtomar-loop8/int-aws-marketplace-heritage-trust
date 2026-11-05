@@ -13,12 +13,14 @@ object is the source of truth for the POC.
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from backend.lambdas.aml_export import quality
 from backend.lambdas.aml_export.designations import load_designations
 from backend.lambdas.aml_export.excel import build_workbook_bytes
 from backend.lambdas.aml_export.export import run_export
@@ -28,6 +30,38 @@ from services.logging import get_logger
 logger = get_logger(__name__)
 
 REGION = os.environ.get("APHRODITE_REGION", "ca-central-1")
+
+
+def _json_list_from_env(var_name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    """Parse a JSON-list env var (comma-separated string as a fallback) into a
+    tuple, falling back to ``default`` on an unset or malformed value. A comma
+    signals genuine comma-separated intent; malformed JSON with no comma falls
+    back to the default rather than being treated as a single-item list."""
+    raw = os.environ.get(var_name, "").strip()
+    if not raw:
+        return default
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        parsed = [p.strip() for p in raw.split(",") if p.strip()] if "," in raw else None
+    if isinstance(parsed, list) and parsed:
+        return tuple(str(v) for v in parsed)
+    return default
+
+
+def _org_config_from_env() -> quality.OrgConfig:
+    default = quality.OrgConfig()
+    return quality.OrgConfig(
+        own_company_names=_json_list_from_env(
+            "APHRODITE_OWN_COMPANY_NAMES", default.own_company_names
+        ),
+        internal_title_keywords=_json_list_from_env(
+            "APHRODITE_INTERNAL_TITLE_KEYWORDS", default.internal_title_keywords
+        ),
+        internal_number_pattern=os.environ.get(
+            "APHRODITE_INTERNAL_MATTER_NUMBER_PATTERN", default.internal_number_pattern
+        ),
+    )
 
 
 @dataclass
@@ -44,6 +78,8 @@ _DEPS: Deps | None = None  # cold-start cache / test injection point
 
 
 def _build_deps() -> Deps:
+    quality.configure(_org_config_from_env())
+
     import boto3
 
     from backend.connectors.clio.connector import ClioConnector

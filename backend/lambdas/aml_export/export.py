@@ -181,7 +181,7 @@ def _clio_party_type(contact: dict[str, Any]) -> str:
 
 # Jurisdiction is read from Estateably's native (non-custom) fields — a party's own
 # address first, then the client-intake province/country for the principal, then the
-# matter's location as a fallback (Aphrodite has no custom fields; Nicole 2026-08-05).
+# matter's location as a fallback (no custom field is available for this).
 # Values are normalized because the source mixes "BC"/"British Columbia" and "CA"/"Canada".
 _CA_PROVINCES = {
     "bc": "British Columbia",
@@ -285,7 +285,7 @@ def _party(
 
     # Alias / AKA: Estateably has no alias field, but exposes "name as it appears in
     # the will" (willname); surface it as a secondary screening name when it differs
-    # from the legal name (Nicole 2026-08-05). Genuine AKAs stay manual per decision G.
+    # from the legal name. Genuine AKAs stay manual per decision G.
     alias_clean = quality.normalize_text(alias)
     if alias_clean and alias_clean.lower() == clean.lower():
         alias_clean = ""
@@ -312,8 +312,9 @@ def _party(
     #                                          takes precedence over a taxonomy term the
     #                                          free text merely name-drops, e.g. "Counsel
     #                                          for the Beneficiary" is counsel, not a
-    #                                          beneficiary (Nicole 2026-07-28)
-    #  • a canonical taxonomy role           → screened (incl. corporate trustees ≠ HTC)
+    #                                          beneficiary
+    #  • a canonical taxonomy role           → screened (incl. corporate trustees that
+    #                                          aren't the deployment's own company)
     #  • an entity with no screenable role   → Excluded Parties (a trust name is not a
     #                                          screenable person — item 1)
     #  • anything else (generic Client, POA Principal, ambiguous person, blank)
@@ -463,7 +464,7 @@ def _matter_gate(
 ) -> tuple[str | None, bool]:
     """Decide whether a matter is excluded, honoring Aphrodite's designation list.
 
-    Returns ``(exclude_reason, not_on_list_flag)``. The HT list takes precedence:
+    Returns ``(exclude_reason, not_on_list_flag)``. The designation list takes precedence:
     a listed *exclude* wins; a listed *include* keeps the matter (overriding a
     backstop rule); otherwise the rule-based backstop applies. A matter kept by
     default that isn't on the list (when a list is loaded) sets ``not_on_list`` so
@@ -1086,7 +1087,7 @@ def _summary(
 
     # Reconciliation counts, derived from the SAME exception rows they appear on so
     # the Summary sheet ties out to the Exceptions/Parties tabs line-for-line (the
-    # memo-vs-file mismatch Nicole flagged, 2026-07-28). "Role to be Confirmed" is
+    # memo-vs-file mismatch flagged during review). "Role to be Confirmed" is
     # taken from the party roles as it appears on the Parties tab.
     def _count_issue(prefix: str) -> int:
         return sum(1 for e in exceptions if str(e.get("issue", "")).startswith(prefix))
