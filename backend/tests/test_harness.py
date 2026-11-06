@@ -1,3 +1,6 @@
+import pytest
+
+from backend import harness
 from backend.harness import lambda_handler, run_checks
 
 
@@ -23,3 +26,17 @@ def test_lambda_handler_delegates(monkeypatch):
     sentinel = {"ok": True, "sources": {}}
     monkeypatch.setattr("backend.harness.run_checks", lambda: sentinel)
     assert lambda_handler() is sentinel
+
+
+def test_run_check_returns_single_source_result(monkeypatch):
+    def fake_probe():
+        return None
+
+    monkeypatch.setattr(harness, "_default_probes", lambda secrets: {"estateably": fake_probe})
+    result = harness.run_check("estateably", secrets=object())
+    assert result == {"ok": True, "detail": "ok"}
+
+
+def test_run_check_unknown_connector_raises():
+    with pytest.raises(ValueError):
+        harness.run_check("not-a-connector", secrets=object())

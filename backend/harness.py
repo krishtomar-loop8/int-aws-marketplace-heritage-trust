@@ -62,5 +62,19 @@ def run_checks(
     return {"ok": overall, "sources": sources}
 
 
+def run_check(name: str, secrets: SecretsClient | None = None) -> dict[str, Any]:
+    """Run a single connector's cheapest read probe on demand.
+
+    Used by the connector-onboarding routes to validate a freshly-saved
+    credential immediately, instead of waiting for the next hourly probe.
+    Raises ``ValueError`` for an unrecognized connector name.
+    """
+    secrets = secrets or SecretsClient()
+    probes = _default_probes(secrets)
+    if name not in probes:
+        raise ValueError(f"unknown connector {name!r}")
+    return run_checks({name: probes[name]}, secrets=secrets)["sources"][name]
+
+
 def lambda_handler(event: dict[str, Any] | None = None, context: Any = None) -> dict[str, Any]:
     return run_checks()
