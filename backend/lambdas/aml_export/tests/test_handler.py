@@ -124,3 +124,15 @@ def test_org_config_from_env_applies_overrides(monkeypatch):
     assert config.internal_number_pattern == r"^\s*9999-\d+"
     # Untouched field keeps its own default.
     assert config.internal_title_keywords == quality.OrgConfig().internal_title_keywords
+
+
+def test_org_config_from_env_empty_list_excludes_nothing(monkeypatch):
+    monkeypatch.setenv("APHRODITE_OWN_COMPANY_NAMES", "[]")
+    config = H._org_config_from_env()
+    assert config.own_company_names == ()
+
+
+def test_org_config_from_env_blank_keyword_entries_filtered(monkeypatch):
+    monkeypatch.setenv("APHRODITE_INTERNAL_TITLE_KEYWORDS", '["suspense", "  ", ""]')
+    config = H._org_config_from_env()
+    assert config.internal_title_keywords == ("suspense",)

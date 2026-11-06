@@ -151,7 +151,7 @@ variable "ab_runner_enabled" {
 variable "org_name" {
   type        = string
   default     = "Aphrodite"
-  description = "Deployment's organization display name, used in the matter-search system prompt and the AML own-company exclusion check."
+  description = "Deployment's organization display name, used in the matter-search system prompt. Does NOT drive the AML own-company exclusion check — see own_company_names."
 }
 
 variable "org_office_address" {
@@ -164,12 +164,22 @@ variable "excluded_sharepoint_folders" {
   type        = list(string)
   default     = ["hr", "human resources", "finance"]
   description = "SharePoint folder names excluded from search results and from the crawler's index. Case-insensitive."
+
+  validation {
+    condition     = alltrue([for f in var.excluded_sharepoint_folders : trimspace(f) != ""])
+    error_message = "excluded_sharepoint_folders entries must not be blank (a blank entry would match every folder name)."
+  }
 }
 
 variable "own_company_names" {
   type        = list(string)
   default     = ["Aphrodite"]
   description = "Party name(s) treated as the deployment's own company and excluded from AML screening (matched as a name prefix)."
+
+  validation {
+    condition     = alltrue([for n in var.own_company_names : trimspace(n) != ""])
+    error_message = "own_company_names entries must not be blank (a blank entry would match every party name as a prefix)."
+  }
 }
 
 variable "internal_title_keywords" {
@@ -188,12 +198,22 @@ variable "internal_title_keywords" {
     "aphrodite administration",
   ]
   description = "Matter title/description keywords (case-insensitive) that mark a matter as internal/administrative, excluded from AML screening."
+
+  validation {
+    condition     = alltrue([for k in var.internal_title_keywords : trimspace(k) != ""])
+    error_message = "internal_title_keywords entries must not be blank (a blank entry would match every matter)."
+  }
 }
 
 variable "internal_matter_number_pattern" {
   type        = string
   default     = "^\\s*(2100-\\d+|999999)\\b"
   description = "Regex matching matter numbers that are internal/administrative, excluded from AML screening."
+
+  validation {
+    condition     = trimspace(var.internal_matter_number_pattern) != ""
+    error_message = "internal_matter_number_pattern must not be blank (an empty pattern matches every matter number)."
+  }
 }
 
 variable "letterhead_name" {

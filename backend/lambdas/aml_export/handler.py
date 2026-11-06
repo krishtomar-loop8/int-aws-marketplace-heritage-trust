@@ -36,7 +36,11 @@ def _json_list_from_env(var_name: str, default: tuple[str, ...]) -> tuple[str, .
     """Parse a JSON-list env var (comma-separated string as a fallback) into a
     tuple, falling back to ``default`` on an unset or malformed value. A comma
     signals genuine comma-separated intent; malformed JSON with no comma falls
-    back to the default rather than being treated as a single-item list."""
+    back to the default rather than being treated as a single-item list. An
+    explicit empty list (``"[]"``) is honored as-is rather than falling back
+    to the default; blank/whitespace-only entries are dropped so they can't
+    accidentally match everything (an empty own-company name, title keyword,
+    or folder name would otherwise match any string)."""
     raw = os.environ.get(var_name, "").strip()
     if not raw:
         return default
@@ -44,9 +48,9 @@ def _json_list_from_env(var_name: str, default: tuple[str, ...]) -> tuple[str, .
         parsed = json.loads(raw)
     except (ValueError, TypeError):
         parsed = [p.strip() for p in raw.split(",") if p.strip()] if "," in raw else None
-    if isinstance(parsed, list) and parsed:
-        return tuple(str(v) for v in parsed)
-    return default
+    if not isinstance(parsed, list):
+        return default
+    return tuple(str(v).strip() for v in parsed if str(v).strip())
 
 
 def _org_config_from_env() -> quality.OrgConfig:

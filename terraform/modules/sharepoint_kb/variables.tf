@@ -58,4 +58,9 @@ variable "excluded_sharepoint_folders" {
   type        = list(string)
   default     = ["hr", "human resources", "finance"]
   description = "SharePoint folder names excluded from the crawl (and the search API's matching exclusion). Case-insensitive."
+
+  validation {
+    condition     = alltrue([for f in var.excluded_sharepoint_folders : trimspace(f) != ""])
+    error_message = "excluded_sharepoint_folders entries must not be blank (a blank entry would match every folder name)."
+  }
 }

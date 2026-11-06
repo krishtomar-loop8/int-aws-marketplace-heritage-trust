@@ -82,3 +82,13 @@ def test_excluded_folders_from_env_malformed_json_falls_back(monkeypatch) -> Non
 def test_excluded_folders_from_env_unset_uses_default(monkeypatch) -> None:
     monkeypatch.delenv("APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS", raising=False)
     assert h._excluded_folders_from_env() == scoping.DEFAULT_EXCLUDED_FOLDERS
+
+
+def test_excluded_folders_from_env_empty_list_excludes_nothing(monkeypatch) -> None:
+    monkeypatch.setenv("APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS", "[]")
+    assert h._excluded_folders_from_env() == frozenset()
+
+
+def test_excluded_folders_from_env_blank_entries_filtered(monkeypatch) -> None:
+    monkeypatch.setenv("APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS", '["hr", "  ", ""]')
+    assert h._excluded_folders_from_env() == frozenset({"hr"})

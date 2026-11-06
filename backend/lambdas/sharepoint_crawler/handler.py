@@ -47,7 +47,10 @@ def _excluded_folders_from_env() -> frozenset[str]:
     same env var and parsing rules the search API uses, so crawl-time
     exclusion stays in sync with query-time exclusion. A comma signals
     genuine comma-separated intent; malformed JSON with no comma falls back
-    to the default rather than being treated as a single-item list."""
+    to the default rather than being treated as a single-item list. An
+    explicit empty list (``"[]"``) is honored as "exclude nothing" rather
+    than falling back to the default; blank/whitespace-only entries are
+    dropped so they can't accidentally match every folder."""
     raw = os.environ.get("APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS", "").strip()
     if not raw:
         return scoping.DEFAULT_EXCLUDED_FOLDERS
@@ -55,9 +58,9 @@ def _excluded_folders_from_env() -> frozenset[str]:
         parsed = json.loads(raw)
     except (ValueError, TypeError):
         parsed = [p.strip() for p in raw.split(",") if p.strip()] if "," in raw else None
-    if isinstance(parsed, list) and parsed:
-        return frozenset(str(v).lower() for v in parsed)
-    return scoping.DEFAULT_EXCLUDED_FOLDERS
+    if not isinstance(parsed, list):
+        return scoping.DEFAULT_EXCLUDED_FOLDERS
+    return frozenset(str(v).strip().lower() for v in parsed if str(v).strip())
 
 
 def handler(event: dict[str, Any] | None = None, context: Any = None) -> dict[str, Any]:
