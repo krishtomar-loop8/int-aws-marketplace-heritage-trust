@@ -113,6 +113,12 @@ resource "aws_cognito_identity_provider" "entra" {
 
 # Public client (SPA, authorization-code + PKCE). Callback URLs are placeholders
 # until the frontend domain exists (Phase 2) and are updated then.
+resource "aws_cognito_user_group" "admins" {
+  name         = "admins"
+  user_pool_id = aws_cognito_user_pool.main.id
+  description  = "Staff who may connect/reconnect source-system credentials (Setup screen)."
+}
+
 resource "aws_cognito_user_pool_client" "web" {
   name         = "aphrodite-web"
   user_pool_id = aws_cognito_user_pool.main.id

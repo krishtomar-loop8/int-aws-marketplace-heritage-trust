@@ -251,6 +251,39 @@ def _actor(event: dict[str, Any]) -> dict[str, Any]:
     return {"sub": claims.get("sub"), "email": claims.get("email")}
 
 
+ADMIN_GROUP_NAME = "admins"
+
+
+def _is_admin(event: dict[str, Any]) -> bool:
+    """True if the caller's JWT carries the admin Cognito group.
+
+    API Gateway's JWT authorizer serializes a multi-value claim like
+    ``cognito:groups`` as a JSON-array string (e.g. ``'["admins"]'``); a
+    single-group membership may come through as a plain string instead. Any
+    parse failure is treated as a single group name rather than raising.
+    """
+    try:
+        claims = event["requestContext"]["authorizer"]["jwt"]["claims"]
+    except (KeyError, TypeError):
+        return False
+    raw = claims.get("cognito:groups", "")
+    if not raw:
+        return False
+    if raw.startswith("["):
+        try:
+            groups = json.loads(raw)
+        except (ValueError, TypeError):
+            groups = [raw]
+    else:
+        groups = [raw]
+    return ADMIN_GROUP_NAME in groups
+
+
+def _require_admin(event: dict[str, Any]) -> dict[str, Any] | None:
+    """Return a 403 response for a non-admin caller, else ``None``."""
+    return None if _is_admin(event) else _response(403, {"error": "admin role required"})
+
+
 def _body(event: dict[str, Any]) -> dict[str, Any]:
     raw = event.get("body")
     if not raw:

@@ -454,3 +454,36 @@ def test_excluded_folders_from_env_blank_entries_filtered(
 ) -> None:
     monkeypatch.setenv("APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS", '["hr", "  ", ""]')
     assert handlers._excluded_folders_from_env() == frozenset({"hr"})
+
+
+def _event_with_groups(groups_claim: Any) -> dict[str, Any]:
+    return {"requestContext": {"authorizer": {"jwt": {"claims": {"cognito:groups": groups_claim}}}}}
+
+
+def test_is_admin_true_for_json_array_claim() -> None:
+    assert handlers._is_admin(_event_with_groups('["admins"]')) is True
+
+
+def test_is_admin_true_for_plain_string_claim() -> None:
+    assert handlers._is_admin(_event_with_groups("admins")) is True
+
+
+def test_is_admin_false_for_other_group() -> None:
+    assert handlers._is_admin(_event_with_groups('["staff"]')) is False
+
+
+def test_is_admin_false_when_claim_missing() -> None:
+    assert handlers._is_admin({"requestContext": {"authorizer": {"jwt": {"claims": {}}}}}) is False
+
+
+def test_is_admin_false_when_claims_missing_entirely() -> None:
+    assert handlers._is_admin({}) is False
+
+
+def test_require_admin_returns_403_body_for_non_admin() -> None:
+    resp = handlers._require_admin({})
+    assert resp is not None and resp["statusCode"] == 403
+
+
+def test_require_admin_returns_none_for_admin() -> None:
+    assert handlers._require_admin(_event_with_groups('["admins"]')) is None
