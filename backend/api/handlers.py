@@ -209,7 +209,25 @@ def _build_deps(*, model_id: str | None = None) -> Deps:
     # per-connector status here and GET /integrations reads it. Absent ⇒ the probe
     # is a no-op and the route reports "not configured".
     health_table = os.environ.get("APHRODITE_INTEGRATION_HEALTH_TABLE")
-    integrations = IntegrationHealthStore(health_table) if health_table else None
+    alert_topic_arn = os.environ.get("APHRODITE_INTEGRATIONS_ALERT_TOPIC_ARN")
+    on_alert = None
+    if alert_topic_arn:
+
+        def on_alert(name: str, detail: str) -> None:  # noqa: F811 - conditional def is intentional
+            try:
+                boto3.client("sns", region_name=REGION).publish(
+                    TopicArn=alert_topic_arn,
+                    Subject=f"{name} connector is down",
+                    Message=detail,
+                )
+            except Exception:  # noqa: BLE001 - an alert failure must not break the probe
+                logger.warning(
+                    "integration alert publish failed", extra={"extra_fields": {"integration": name}}
+                )
+
+    integrations = (
+        IntegrationHealthStore(health_table, on_alert=on_alert) if health_table else None
+    )
 
     return Deps(
         resolver,

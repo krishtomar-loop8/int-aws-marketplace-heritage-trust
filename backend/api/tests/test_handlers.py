@@ -594,6 +594,26 @@ def test_quickbooks_start_route_success(monkeypatch: pytest.MonkeyPatch) -> None
     assert resp["statusCode"] == 200
 
 
+def test_build_deps_wires_sns_alert_when_topic_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APHRODITE_JOBS_TABLE", "jobs")
+    monkeypatch.setenv("APHRODITE_SELF_FUNCTION", "fn")
+    monkeypatch.setenv("APHRODITE_INTEGRATION_HEALTH_TABLE", "health")
+    monkeypatch.setenv("APHRODITE_INTEGRATIONS_ALERT_TOPIC_ARN", "arn:aws:sns:ca-central-1:123:topic")
+    deps = handlers._build_deps()
+    assert deps.integrations is not None
+    assert deps.integrations.on_alert is not None
+
+
+def test_build_deps_leaves_alert_unwired_when_topic_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APHRODITE_JOBS_TABLE", "jobs")
+    monkeypatch.setenv("APHRODITE_SELF_FUNCTION", "fn")
+    monkeypatch.setenv("APHRODITE_INTEGRATION_HEALTH_TABLE", "health")
+    monkeypatch.delenv("APHRODITE_INTEGRATIONS_ALERT_TOPIC_ARN", raising=False)
+    deps = handlers._build_deps()
+    assert deps.integrations is not None
+    assert deps.integrations.on_alert is None
+
+
 def test_quickbooks_callback_route_redirects_without_admin_header(monkeypatch: pytest.MonkeyPatch) -> None:
     install_deps(monkeypatch)
     monkeypatch.setenv("APHRODITE_QUICKBOOKS_REDIRECT_URI", "https://api.example/connectors/quickbooks/callback")

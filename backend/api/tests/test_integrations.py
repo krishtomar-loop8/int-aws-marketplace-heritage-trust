@@ -159,3 +159,57 @@ def test_suggest_fix_server_error() -> None:
 def test_suggest_fix_default() -> None:
     msg = suggest_fix("clio", "ValueError: something odd")
     assert "secrets manager" in msg.lower()
+
+
+# -- on_alert (threshold-based alerting) -------------------------------------
+
+
+def test_alert_fires_at_threshold_not_before() -> None:
+    calls: list[tuple[str, str]] = []
+    store = IntegrationHealthStore(
+        table="t", client=FakeDdb(), clock=Clock(), on_alert=lambda name, detail: calls.append((name, detail))
+    )
+    store.record_result("clio", ok=False, detail="boom")  # 1st failure
+    assert calls == []
+    store.record_result("clio", ok=False, detail="boom")  # 2nd failure (ALERT_THRESHOLD)
+    assert calls == [("clio", "boom")]
+
+
+def test_alert_not_resent_on_subsequent_failures() -> None:
+    calls: list[tuple[str, str]] = []
+    store = IntegrationHealthStore(
+        table="t", client=FakeDdb(), clock=Clock(), on_alert=lambda name, detail: calls.append((name, detail))
+    )
+    for _ in range(4):
+        store.record_result("clio", ok=False, detail="boom")
+    assert len(calls) == 1
+
+
+def test_alert_not_fired_on_recovery() -> None:
+    calls: list[tuple[str, str]] = []
+    store = IntegrationHealthStore(
+        table="t", client=FakeDdb(), clock=Clock(), on_alert=lambda name, detail: calls.append((name, detail))
+    )
+    store.record_result("clio", ok=False, detail="boom")
+    store.record_result("clio", ok=False, detail="boom")
+    store.record_result("clio", ok=True)
+    assert len(calls) == 1  # only the original alert, not a second one on recovery
+
+
+def test_no_on_alert_configured_is_a_noop() -> None:
+    store = IntegrationHealthStore(table="t", client=FakeDdb(), clock=Clock())  # on_alert omitted
+    store.record_result("clio", ok=False, detail="boom")
+    store.record_result("clio", ok=False, detail="boom")  # must not raise
+
+
+def test_repeated_healthy_results_never_fire_alert() -> None:
+    # Review Focus: re-submitting good credentials for an already-healthy
+    # connector (repeated ok=True) must not crash or spuriously alert.
+    calls: list[tuple[str, str]] = []
+    store = IntegrationHealthStore(
+        table="t", client=FakeDdb(), clock=Clock(), on_alert=lambda name, detail: calls.append((name, detail))
+    )
+    store.record_result("clio", ok=True)
+    store.record_result("clio", ok=True)
+    store.record_result("clio", ok=True)
+    assert calls == []

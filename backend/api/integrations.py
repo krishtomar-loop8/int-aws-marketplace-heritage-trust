@@ -98,6 +98,11 @@ class IntegrationHealthStore:
     table: str
     client: Any | None = None  # boto3 dynamodb client; lazily built in the Lambda
     clock: Callable[[], float] = time.time
+    # Called once per outage, when consecutive_failures first reaches
+    # ALERT_THRESHOLD — not on every failure (a single blip is usually
+    # transient) and not re-sent on every subsequent failure of the same
+    # outage. None (the default) means no alerting is configured.
+    on_alert: Callable[[str, str], None] | None = None
     _client: Any = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -152,6 +157,9 @@ class IntegrationHealthStore:
                 extra={"extra_fields": {"integration": integration}},
             )
             return
+
+        if not ok and consecutive == ALERT_THRESHOLD and self.on_alert:
+            self.on_alert(integration, detail or "ok")
 
         # Downtime log: append a row only when the state actually flips (both
         # directions), so the log is a clean history of outages and recoveries.
