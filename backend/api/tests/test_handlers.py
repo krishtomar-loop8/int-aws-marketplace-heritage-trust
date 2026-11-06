@@ -487,3 +487,47 @@ def test_require_admin_returns_403_body_for_non_admin() -> None:
 
 def test_require_admin_returns_none_for_admin() -> None:
     assert handlers._require_admin(_event_with_groups('["admins"]')) is None
+
+
+def admin_api_event(method: str, path: str, *, body: dict | None = None) -> dict:
+    event = api_event(method, path, body=body)
+    event["requestContext"]["authorizer"]["jwt"]["claims"]["cognito:groups"] = '["admins"]'
+    return event
+
+
+def test_connect_estateably_route_requires_admin(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_deps(monkeypatch)
+    resp = handlers.handler(api_event("POST", "/connectors/estateably", body={}))
+    assert resp["statusCode"] == 403
+
+
+def test_connect_estateably_route_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_deps(monkeypatch)
+    monkeypatch.setattr(
+        handlers.connectors_admin, "connect_estateably",
+        lambda secrets, body: {"ok": True, "detail": "ok"},
+    )
+    resp = handlers.handler(
+        admin_api_event("POST", "/connectors/estateably", body={"username": "u", "password": "p"})
+    )
+    assert resp["statusCode"] == 200
+
+
+def test_connect_graph_route_requires_admin(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_deps(monkeypatch)
+    resp = handlers.handler(api_event("POST", "/connectors/graph", body={}))
+    assert resp["statusCode"] == 403
+
+
+def test_connect_graph_route_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_deps(monkeypatch)
+    monkeypatch.setattr(
+        handlers.connectors_admin, "connect_graph",
+        lambda secrets, body: {"ok": True, "detail": "ok"},
+    )
+    resp = handlers.handler(
+        admin_api_event(
+            "POST", "/connectors/graph", body={"tenant_id": "t", "client_id": "c", "client_secret": "s"}
+        )
+    )
+    assert resp["statusCode"] == 200

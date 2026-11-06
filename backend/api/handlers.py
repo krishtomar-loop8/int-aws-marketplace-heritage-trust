@@ -24,6 +24,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from backend.api import connectors_admin
 from backend.api.activity import ActivityLog
 from backend.api.aml_admin import AmlExportTrigger, AmlScheduleService, ScheduleError
 from backend.api.aml_reports import AmlExportAccessError, AmlExportsService
@@ -40,6 +41,7 @@ from backend.search.quick_answers import QuickAnswerService
 from backend.search.resolve import MatterResolver
 from backend.search.synthesize import MatterSynthesizer
 from services.logging import get_logger
+from services.secrets import SecretsClient
 
 logger = get_logger(__name__)
 
@@ -86,6 +88,7 @@ class Deps:
     aml_schedule: AmlScheduleService | None = None
     activity: ActivityLog | None = None
     integrations: IntegrationHealthStore | None = None
+    secrets: SecretsClient | None = None
 
 
 _DEPS: Deps | None = None  # cold-start cache / test injection point
@@ -224,6 +227,7 @@ def _build_deps(*, model_id: str | None = None) -> Deps:
         aml_schedule,
         activity,
         integrations,
+        secrets=secrets,
     )
 
 
@@ -576,6 +580,27 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
         if deps.integrations is None:
             return _response(503, {"error": "integration health not configured"})
         return _response(200, deps.integrations.snapshot())
+
+    # -- Connector onboarding / reconnect (admin-gated credential writes) ---
+    if method == "POST" and path.endswith("/connectors/estateably"):
+        forbidden = _require_admin(event)
+        if forbidden:
+            return forbidden
+        try:
+            result = connectors_admin.connect_estateably(deps.secrets, _body(event))
+        except connectors_admin.ConnectorValidationError as exc:
+            return _response(400, {"error": str(exc)})
+        return _response(200, result)
+
+    if method == "POST" and path.endswith("/connectors/graph"):
+        forbidden = _require_admin(event)
+        if forbidden:
+            return forbidden
+        try:
+            result = connectors_admin.connect_graph(deps.secrets, _body(event))
+        except connectors_admin.ConnectorValidationError as exc:
+            return _response(400, {"error": str(exc)})
+        return _response(200, result)
 
     return _response(404, {"error": "not found"})
 
