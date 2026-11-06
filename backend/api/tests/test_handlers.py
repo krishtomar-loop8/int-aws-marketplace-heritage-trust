@@ -570,3 +570,40 @@ def test_clio_exchange_route_success(monkeypatch: pytest.MonkeyPatch) -> None:
         )
     )
     assert resp["statusCode"] == 200
+
+
+def test_quickbooks_start_route_requires_admin(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_deps(monkeypatch)
+    resp = handlers.handler(api_event("POST", "/connectors/quickbooks/start", body={}))
+    assert resp["statusCode"] == 403
+
+
+def test_quickbooks_start_route_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_deps(monkeypatch)
+    monkeypatch.setenv("APHRODITE_QUICKBOOKS_REDIRECT_URI", "https://api.example/connectors/quickbooks/callback")
+    monkeypatch.setattr(
+        handlers.connectors_admin, "quickbooks_start",
+        lambda secrets, body, *, redirect_uri: {"url": "https://appcenter.intuit.com/connect/oauth2?x"},
+    )
+    resp = handlers.handler(
+        admin_api_event(
+            "POST", "/connectors/quickbooks/start",
+            body={"client_id": "c", "client_secret": "s", "environment": "sandbox"},
+        )
+    )
+    assert resp["statusCode"] == 200
+
+
+def test_quickbooks_callback_route_redirects_without_admin_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_deps(monkeypatch)
+    monkeypatch.setenv("APHRODITE_QUICKBOOKS_REDIRECT_URI", "https://api.example/connectors/quickbooks/callback")
+    monkeypatch.setenv("APHRODITE_APP_BASE_URL", "https://app.example")
+    monkeypatch.setattr(
+        handlers.connectors_admin, "quickbooks_callback",
+        lambda *a, **k: "https://app.example/?setup=quickbooks-connected",
+    )
+    event = api_event("GET", "/connectors/quickbooks/callback")
+    event["queryStringParameters"] = {"code": "c", "realmId": "r", "state": "s"}
+    resp = handlers.handler(event)
+    assert resp["statusCode"] == 302
+    assert resp["headers"]["Location"] == "https://app.example/?setup=quickbooks-connected"

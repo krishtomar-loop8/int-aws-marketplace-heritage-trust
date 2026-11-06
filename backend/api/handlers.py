@@ -622,6 +622,33 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
             return _response(400, {"error": str(exc)})
         return _response(200, result)
 
+    if method == "POST" and path.endswith("/connectors/quickbooks/start"):
+        forbidden = _require_admin(event)
+        if forbidden:
+            return forbidden
+        try:
+            result = connectors_admin.quickbooks_start(
+                deps.secrets,
+                _body(event),
+                redirect_uri=os.environ["APHRODITE_QUICKBOOKS_REDIRECT_URI"],
+            )
+        except connectors_admin.ConnectorValidationError as exc:
+            return _response(400, {"error": str(exc)})
+        return _response(200, result)
+
+    # Hit directly by Intuit's browser redirect — no Authorization header,
+    # so this route is intentionally not admin-gated (the `state` minted by
+    # /connectors/quickbooks/start is what protects it; see connectors_admin).
+    if method == "GET" and path.endswith("/connectors/quickbooks/callback"):
+        query = event.get("queryStringParameters") or {}
+        url = connectors_admin.quickbooks_callback(
+            deps.secrets,
+            query,
+            redirect_uri=os.environ["APHRODITE_QUICKBOOKS_REDIRECT_URI"],
+            app_base_url=os.environ["APHRODITE_APP_BASE_URL"],
+        )
+        return {"statusCode": 302, "headers": {"Location": url}}
+
     return _response(404, {"error": "not found"})
 
 

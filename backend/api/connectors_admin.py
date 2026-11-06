@@ -11,10 +11,13 @@ validate-then-store logic, unit-testable without an API Gateway event.
 
 from __future__ import annotations
 
+import secrets as _pysecrets
 from typing import Any
 
 from backend.harness import run_check
 from services.secrets import SecretsClient
+
+_QUICKBOOKS_ENVIRONMENTS = ("sandbox", "production")
 
 
 class ConnectorValidationError(Exception):
@@ -143,3 +146,77 @@ def clio_exchange(secrets: SecretsClient, payload: dict[str, Any]) -> dict[str, 
 
     secrets.put("aphrodite/clio", candidate)
     return run_check("clio", secrets)
+
+
+def quickbooks_start(
+    secrets: SecretsClient, payload: dict[str, Any], *, redirect_uri: str
+) -> dict[str, Any]:
+    """Store pending QuickBooks app credentials and return the authorize URL.
+
+    The secret is written *before* the redirect, holding no refresh token
+    yet, so the callback (which Intuit invokes with no way to ask the admin
+    for client_id/client_secret again) can read them back out. A fresh call
+    always overwrites — the same control serves both first connect and
+    reconnect.
+    """
+    client_id = str(payload.get("client_id") or "").strip()
+    client_secret = str(payload.get("client_secret") or "")
+    environment = str(payload.get("environment") or "sandbox").strip().lower()
+    if not (client_id and client_secret):
+        raise ConnectorValidationError("client_id and client_secret are required")
+    if environment not in _QUICKBOOKS_ENVIRONMENTS:
+        raise ConnectorValidationError(
+            f"environment must be one of {_QUICKBOOKS_ENVIRONMENTS!r}"
+        )
+
+    state = _pysecrets.token_urlsafe(24)
+    secrets.put(
+        "aphrodite/quickbooks",
+        {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "environment": environment,
+            "_oauth_state": state,
+        },
+    )
+
+    from backend.connectors.quickbooks.oauth_bootstrap import build_authorize_url
+
+    url, _state = build_authorize_url(client_id, redirect_uri=redirect_uri, state=state)
+    return {"url": url}
+
+
+def quickbooks_callback(
+    secrets: SecretsClient, query: dict[str, Any], *, redirect_uri: str, app_base_url: str
+) -> str:
+    """Complete the QuickBooks OAuth redirect; always returns a redirect URL.
+
+    Never raises — its only caller is a browser-facing GET with no way to
+    render a JSON error, so any failure (missing params, a state mismatch,
+    a failed exchange) redirects to an error page instead.
+    """
+    try:
+        stored = secrets.get("aphrodite/quickbooks", refresh=True)
+        code = query.get("code")
+        state = query.get("state")
+        if not code or not state or state != stored.get("_oauth_state"):
+            raise ConnectorValidationError("missing or mismatched OAuth state")
+
+        from backend.connectors.quickbooks.oauth_bootstrap import exchange_code
+
+        token_payload = exchange_code(
+            stored["client_id"], stored["client_secret"], code, redirect_uri=redirect_uri
+        )
+        stored.pop("_oauth_state", None)
+        stored["refresh_token"] = token_payload["refresh_token"]
+        stored["realm_id"] = query.get("realmId")
+        secrets.put("aphrodite/quickbooks", stored)
+
+        try:
+            run_check("quickbooks", secrets)
+        except Exception:  # noqa: BLE001 - a health-check hiccup must not undo a real success
+            pass
+
+        return f"{app_base_url}/?setup=quickbooks-connected"
+    except Exception:  # noqa: BLE001 - this function must never raise; see docstring
+        return f"{app_base_url}/?setup=quickbooks-error"

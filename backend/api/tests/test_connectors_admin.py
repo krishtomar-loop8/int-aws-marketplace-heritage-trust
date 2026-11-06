@@ -154,3 +154,71 @@ def test_clio_exchange_failure_stores_nothing():
     with pytest.raises(connectors_admin.ConnectorValidationError):
         connectors_admin.clio_exchange(secrets, {"client_id": "c", "client_secret": "s", "code": "bad"})
     assert secrets.stored == {}
+
+
+# -- QuickBooks ---------------------------------------------------------
+
+
+def test_quickbooks_start_stores_pending_secret_and_returns_url():
+    secrets = _FakeSecrets()
+    result = connectors_admin.quickbooks_start(
+        secrets, {"client_id": "c", "client_secret": "s", "environment": "sandbox"},
+        redirect_uri="https://api.example/connectors/quickbooks/callback",
+    )
+    assert result["url"].startswith("https://appcenter.intuit.com/connect/oauth2?")
+    stored = secrets.stored["aphrodite/quickbooks"]
+    assert stored["client_id"] == "c" and "_oauth_state" in stored
+
+
+def test_quickbooks_start_rejects_missing_fields():
+    secrets = _FakeSecrets()
+    with pytest.raises(connectors_admin.ConnectorValidationError):
+        connectors_admin.quickbooks_start(secrets, {}, redirect_uri="https://x/callback")
+    assert secrets.stored == {}
+
+
+def test_quickbooks_start_rejects_bad_environment():
+    secrets = _FakeSecrets()
+    with pytest.raises(connectors_admin.ConnectorValidationError):
+        connectors_admin.quickbooks_start(
+            secrets, {"client_id": "c", "client_secret": "s", "environment": "prod"},
+            redirect_uri="https://x/callback",
+        )
+    assert secrets.stored == {}
+
+
+@responses.activate
+def test_quickbooks_callback_matching_state_completes_exchange(monkeypatch):
+    secrets = _FakeSecrets()
+    secrets.stored["aphrodite/quickbooks"] = {
+        "client_id": "c", "client_secret": "s", "environment": "sandbox", "_oauth_state": "abc",
+    }
+    responses.add(
+        responses.POST,
+        "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer",
+        json={"refresh_token": "rt", "access_token": "at"},
+        status=200,
+    )
+    monkeypatch.setattr(connectors_admin, "run_check", lambda name, secrets: {"ok": True, "detail": "ok"})
+    url = connectors_admin.quickbooks_callback(
+        secrets, {"code": "code1", "realmId": "r1", "state": "abc"},
+        redirect_uri="https://api.example/connectors/quickbooks/callback",
+        app_base_url="https://app.example",
+    )
+    assert url == "https://app.example/?setup=quickbooks-connected"
+    stored = secrets.stored["aphrodite/quickbooks"]
+    assert stored["refresh_token"] == "rt" and stored["realm_id"] == "r1" and "_oauth_state" not in stored
+
+
+def test_quickbooks_callback_mismatched_state_does_not_complete():
+    secrets = _FakeSecrets()
+    secrets.stored["aphrodite/quickbooks"] = {
+        "client_id": "c", "client_secret": "s", "environment": "sandbox", "_oauth_state": "abc",
+    }
+    url = connectors_admin.quickbooks_callback(
+        secrets, {"code": "code1", "realmId": "r1", "state": "WRONG"},
+        redirect_uri="https://api.example/connectors/quickbooks/callback",
+        app_base_url="https://app.example",
+    )
+    assert url == "https://app.example/?setup=quickbooks-error"
+    assert "refresh_token" not in secrets.stored["aphrodite/quickbooks"]
