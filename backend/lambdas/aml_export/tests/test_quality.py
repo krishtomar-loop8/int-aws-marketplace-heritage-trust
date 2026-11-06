@@ -225,10 +225,12 @@ def test_configure_changes_own_company_match():
     assert quality.is_excluded_party_name("Aphrodite") is None
 
 
-def test_configure_invalid_regex_raises_at_call_time():
-    quality.configure(OrgConfig(internal_number_pattern="("))  # unbalanced group
+def test_configure_invalid_regex_raises_at_configure_time():
+    # Previously this was swallowed per-matter by export.py's defensive
+    # try/except, producing a "successful" run with almost everything
+    # excluded instead of a loud failure — raise eagerly here instead.
     with pytest.raises(re.error):
-        quality.exclusion_reason(matter_number="1", description="", title="", status="open")
+        quality.configure(OrgConfig(internal_number_pattern="("))  # unbalanced group
 
 
 def test_configure_empty_own_company_excludes_nothing():

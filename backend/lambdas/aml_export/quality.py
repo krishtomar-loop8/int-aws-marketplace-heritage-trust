@@ -49,18 +49,28 @@ class OrgConfig:
 
 
 _CONFIG = OrgConfig()
+_INTERNAL_NUMBER_RE = re.compile(_CONFIG.internal_number_pattern)
 
 
 def configure(config: OrgConfig) -> None:
-    """Set the active deployment config (called once at Lambda cold start)."""
-    global _CONFIG
+    """Set the active deployment config (called once at Lambda cold start).
+
+    Compiles ``internal_number_pattern`` immediately so an invalid regex fails
+    loudly here, instead of being swallowed per-matter by ``export.py``'s
+    defensive per-matter exception handling (which would otherwise turn a bad
+    config into a "successful" run with almost everything excluded).
+    """
+    global _CONFIG, _INTERNAL_NUMBER_RE
+    compiled = re.compile(config.internal_number_pattern)
     _CONFIG = config
+    _INTERNAL_NUMBER_RE = compiled
 
 
 def reset_config() -> None:
     """Restore the default config (for test isolation)."""
-    global _CONFIG
+    global _CONFIG, _INTERNAL_NUMBER_RE
     _CONFIG = OrgConfig()
+    _INTERNAL_NUMBER_RE = re.compile(_CONFIG.internal_number_pattern)
 
 
 def is_inactive_status(status: str | None) -> bool:
@@ -83,8 +93,7 @@ def exclusion_reason(
     if re.search(r"\btest\b", haystack):
         return "Test matter"
     num = str(matter_number or "")
-    internal_number_re = re.compile(_CONFIG.internal_number_pattern)
-    if internal_number_re.match(num) or any(
+    if _INTERNAL_NUMBER_RE.match(num) or any(
         k.lower() in haystack for k in _CONFIG.internal_title_keywords
     ):
         return "Internal / administrative matter"
