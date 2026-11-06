@@ -23,6 +23,27 @@ variable "clio_secret_arn" {
   description = "Clio secret ARN the Lambda may write back to (rotated OAuth refresh token)."
 }
 
+variable "estateably_secret_arn" {
+  type        = string
+  description = "Estateably secret ARN the Lambda may write to (admin-submitted via the Setup screen)."
+}
+
+variable "graph_secret_arn" {
+  type        = string
+  description = "Graph secret ARN the Lambda may write to (admin-submitted via the Setup screen)."
+}
+
+variable "app_base_url" {
+  type        = string
+  description = "The deployed SPA's origin (e.g. CloudFront domain), used to redirect the browser back after the QuickBooks OAuth callback."
+}
+
+variable "integrations_alert_emails" {
+  type        = list(string)
+  default     = []
+  description = "Staff emails subscribed to the 'connector down' SNS alert topic."
+}
+
 variable "kms_key_arn" {
   type        = string
   description = "CMK ARN used to decrypt the connector secrets."

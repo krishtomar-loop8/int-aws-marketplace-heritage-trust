@@ -60,6 +60,8 @@ module "search_api" {
   secret_arns             = values(module.secrets.secret_arns)
   quickbooks_secret_arn   = module.secrets.secret_arns["quickbooks"]
   clio_secret_arn         = module.secrets.secret_arns["clio"]
+  estateably_secret_arn   = module.secrets.secret_arns["estateably"]
+  graph_secret_arn        = module.secrets.secret_arns["graph"]
   kms_key_arn             = module.kms.secrets_key_arn
   cognito_user_pool_id    = module.cognito.user_pool_id
   cognito_app_client_id   = module.cognito.user_pool_client_id
@@ -91,6 +93,9 @@ module "search_api" {
   org_name                    = var.org_name
   org_office_address          = var.org_office_address
   excluded_sharepoint_folders = var.excluded_sharepoint_folders
+  # Connector onboarding: the Setup screen's redirect target + down-connector alert.
+  app_base_url              = var.app_base_url
+  integrations_alert_emails = var.integrations_alert_emails
 }
 
 # Phase 2+ (D3): SharePoint document Knowledge Base — a scheduled crawler copies

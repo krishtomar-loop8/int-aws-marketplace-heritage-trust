@@ -239,3 +239,16 @@ variable "letterhead_privacy_notice" {
   default     = "Our privacy practices are described at www.aphrodite.example/privacy."
   description = "Privacy disclosure line shown at the foot of the quarterly-report cover letter."
 }
+
+# -- Connector onboarding & reconnect (Setup screen) -------------------------
+
+variable "app_base_url" {
+  type        = string
+  description = "The deployed SPA's origin (e.g. CloudFront domain), used to redirect the browser back after the QuickBooks OAuth callback."
+}
+
+variable "integrations_alert_emails" {
+  type        = list(string)
+  default     = []
+  description = "Staff emails subscribed to the 'connector down' SNS alert topic."
+}

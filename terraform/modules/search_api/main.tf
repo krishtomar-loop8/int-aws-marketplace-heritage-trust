@@ -168,6 +168,24 @@ data "aws_iam_policy_document" "search" {
     actions   = ["secretsmanager:PutSecretValue"]
     resources = [var.clio_secret_arn]
   }
+  # Connector onboarding: the admin-gated /connectors/* routes write a
+  # freshly-validated credential to each connector's own secret. Scoped one
+  # statement per secret, same discipline as the OAuth-rotation writes above.
+  statement {
+    sid       = "WriteEstateablyCredential"
+    actions   = ["secretsmanager:PutSecretValue"]
+    resources = [var.estateably_secret_arn]
+  }
+  statement {
+    sid       = "WriteGraphCredential"
+    actions   = ["secretsmanager:PutSecretValue"]
+    resources = [var.graph_secret_arn]
+  }
+  statement {
+    sid       = "PublishIntegrationsAlert"
+    actions   = ["sns:Publish"]
+    resources = [aws_sns_topic.integrations_alert.arn]
+  }
   statement {
     # Decrypt the connector secrets and the KMS-encrypted objects we read, and
     # generate a data key to write the SSE-KMS Certificate of Search.
@@ -343,21 +361,24 @@ resource "aws_lambda_function" "search" {
 
   environment {
     variables = {
-      APHRODITE_REGION                      = var.aws_region
-      APHRODITE_JOBS_TABLE                  = aws_dynamodb_table.jobs.name
-      APHRODITE_ACTIVITY_TABLE              = aws_dynamodb_table.activity.name
-      APHRODITE_INTEGRATION_HEALTH_TABLE    = aws_dynamodb_table.integration_health.name
-      APHRODITE_SELF_FUNCTION               = local.function_name
-      APHRODITE_SHAREPOINT_KB_ID            = var.sharepoint_kb_id
-      APHRODITE_OUTPUTS_BUCKET              = var.outputs_bucket
-      APHRODITE_OUTPUTS_KMS_KEY_ID          = var.kms_key_arn
-      APHRODITE_QUARTERLY_FUNCTION          = var.quarterly_function_name
-      APHRODITE_SANCTIONS_BUCKET            = var.sanctions_bucket
-      APHRODITE_AML_EXPORT_FUNCTION         = var.aml_export_function_name
-      APHRODITE_AML_SCHEDULE_NAME           = var.aml_schedule_name
-      APHRODITE_ORG_NAME                    = var.org_name
-      APHRODITE_ORG_OFFICE_ADDRESS          = var.org_office_address
-      APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS = jsonencode(var.excluded_sharepoint_folders)
+      APHRODITE_REGION                       = var.aws_region
+      APHRODITE_JOBS_TABLE                   = aws_dynamodb_table.jobs.name
+      APHRODITE_ACTIVITY_TABLE               = aws_dynamodb_table.activity.name
+      APHRODITE_INTEGRATION_HEALTH_TABLE     = aws_dynamodb_table.integration_health.name
+      APHRODITE_SELF_FUNCTION                = local.function_name
+      APHRODITE_SHAREPOINT_KB_ID             = var.sharepoint_kb_id
+      APHRODITE_OUTPUTS_BUCKET               = var.outputs_bucket
+      APHRODITE_OUTPUTS_KMS_KEY_ID           = var.kms_key_arn
+      APHRODITE_QUARTERLY_FUNCTION           = var.quarterly_function_name
+      APHRODITE_SANCTIONS_BUCKET             = var.sanctions_bucket
+      APHRODITE_AML_EXPORT_FUNCTION          = var.aml_export_function_name
+      APHRODITE_AML_SCHEDULE_NAME            = var.aml_schedule_name
+      APHRODITE_ORG_NAME                     = var.org_name
+      APHRODITE_ORG_OFFICE_ADDRESS           = var.org_office_address
+      APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS  = jsonencode(var.excluded_sharepoint_folders)
+      APHRODITE_QUICKBOOKS_REDIRECT_URI      = "${aws_apigatewayv2_api.search.api_endpoint}/connectors/quickbooks/callback"
+      APHRODITE_APP_BASE_URL                 = var.app_base_url
+      APHRODITE_INTEGRATIONS_ALERT_TOPIC_ARN = aws_sns_topic.integrations_alert.arn
     }
   }
 
@@ -466,6 +487,11 @@ resource "aws_apigatewayv2_route" "routes" {
     "DELETE /screener/certificates",
     "GET /activity",
     "GET /integrations",
+    "POST /connectors/estateably",
+    "POST /connectors/graph",
+    "POST /connectors/clio/authorize-url",
+    "POST /connectors/clio/exchange",
+    "POST /connectors/quickbooks/start",
   ])
 
   api_id             = aws_apigatewayv2_api.search.id
@@ -473,6 +499,17 @@ resource "aws_apigatewayv2_route" "routes" {
   target             = "integrations/${aws_apigatewayv2_integration.search.id}"
   authorization_type = "JWT"
   authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
+}
+
+# Hit directly by Intuit's browser redirect after OAuth consent — no
+# Authorization header, so this route alone cannot use the Cognito JWT
+# authorizer above. Protected instead by the one-time `state` value
+# /connectors/quickbooks/start mints (see backend/api/connectors_admin.py).
+resource "aws_apigatewayv2_route" "quickbooks_callback" {
+  api_id             = aws_apigatewayv2_api.search.id
+  route_key          = "GET /connectors/quickbooks/callback"
+  target             = "integrations/${aws_apigatewayv2_integration.search.id}"
+  authorization_type = "NONE"
 }
 
 resource "aws_apigatewayv2_stage" "default" {
@@ -487,6 +524,22 @@ resource "aws_lambda_permission" "apigw" {
   function_name = aws_lambda_function.search.function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.search.execution_arn}/*/*"
+}
+
+# -- connector onboarding: down-connector alert ------------------------------
+# Notifies staff when a connector crosses the health store's existing
+# ALERT_THRESHOLD, so a broken connection is caught before a user hits a
+# dead search (not on every blip — see backend/api/integrations.py).
+
+resource "aws_sns_topic" "integrations_alert" {
+  name = "aphrodite-integrations-alert"
+}
+
+resource "aws_sns_topic_subscription" "integrations_alert_emails" {
+  for_each  = toset(var.integrations_alert_emails)
+  topic_arn = aws_sns_topic.integrations_alert.arn
+  protocol  = "email"
+  endpoint  = each.value
 }
 
 # -- EventBridge Scheduler: hourly connector health probe -------------------
