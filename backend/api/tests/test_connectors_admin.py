@@ -116,3 +116,41 @@ def test_connect_graph_missing_fields_rejected():
     with pytest.raises(connectors_admin.ConnectorValidationError):
         connectors_admin.connect_graph(secrets, {"tenant_id": "", "client_id": "", "client_secret": ""})
     assert secrets.stored == {}
+
+
+# -- Clio -------------------------------------------------------------------
+
+
+def test_clio_authorize_url_builds_oob_link():
+    result = connectors_admin.clio_authorize_url({"client_id": "abc"})
+    assert result["url"].startswith("https://app.clio.com/oauth/authorize?")
+    assert "state" in result
+
+
+def test_clio_authorize_url_missing_client_id_rejected():
+    with pytest.raises(connectors_admin.ConnectorValidationError):
+        connectors_admin.clio_authorize_url({})
+
+
+@responses.activate
+def test_clio_exchange_stores_and_validates_on_success(monkeypatch):
+    responses.add(
+        responses.POST,
+        "https://app.clio.com/oauth/token",
+        json={"refresh_token": "rt", "access_token": "at"},
+        status=200,
+    )
+    monkeypatch.setattr(connectors_admin, "run_check", lambda name, secrets: {"ok": True, "detail": "ok"})
+    secrets = _FakeSecrets()
+    result = connectors_admin.clio_exchange(secrets, {"client_id": "c", "client_secret": "s", "code": "code123"})
+    assert secrets.stored["aphrodite/clio"]["refresh_token"] == "rt"
+    assert result == {"ok": True, "detail": "ok"}
+
+
+@responses.activate
+def test_clio_exchange_failure_stores_nothing():
+    responses.add(responses.POST, "https://app.clio.com/oauth/token", json={}, status=400)
+    secrets = _FakeSecrets()
+    with pytest.raises(connectors_admin.ConnectorValidationError):
+        connectors_admin.clio_exchange(secrets, {"client_id": "c", "client_secret": "s", "code": "bad"})
+    assert secrets.stored == {}

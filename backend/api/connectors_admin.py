@@ -87,3 +87,59 @@ def connect_graph(secrets: SecretsClient, payload: dict[str, Any]) -> dict[str, 
 
     secrets.put("aphrodite/graph", candidate)
     return run_check("graph", secrets)
+
+
+def clio_authorize_url(payload: dict[str, Any]) -> dict[str, Any]:
+    """Build the Clio out-of-band authorize link for an admin to send/open.
+
+    No Secrets Manager write here — Clio shows the code on-screen rather
+    than redirecting to us; the admin pastes it into :func:`clio_exchange`.
+    """
+    client_id = str(payload.get("client_id") or "").strip()
+    if not client_id:
+        raise ConnectorValidationError("client_id is required")
+
+    from backend.connectors.clio.oauth_bootstrap import build_authorize_url
+
+    kwargs: dict[str, Any] = {}
+    base_url = str(payload.get("base_url") or "").strip()
+    if base_url:
+        kwargs["base_url"] = base_url
+    url, state = build_authorize_url(client_id, **kwargs)
+    return {"url": url, "state": state}
+
+
+def clio_exchange(secrets: SecretsClient, payload: dict[str, Any]) -> dict[str, Any]:
+    """Exchange a pasted Clio authorization code and store the refresh token.
+
+    Returns ``run_check("clio", secrets)``'s result on success; raises
+    :class:`ConnectorValidationError` (nothing stored) on a bad exchange.
+    """
+    client_id = str(payload.get("client_id") or "").strip()
+    client_secret = str(payload.get("client_secret") or "")
+    code = str(payload.get("code") or "").strip()
+    if not (client_id and client_secret and code):
+        raise ConnectorValidationError("client_id, client_secret, and code are required")
+
+    from backend.connectors.clio.oauth_bootstrap import exchange_code
+    from services.http import HttpError
+
+    kwargs: dict[str, Any] = {}
+    base_url = str(payload.get("base_url") or "").strip()
+    if base_url:
+        kwargs["base_url"] = base_url
+    try:
+        token_payload = exchange_code(client_id, client_secret, code, **kwargs)
+    except HttpError as exc:
+        raise ConnectorValidationError(f"Clio authorization-code exchange failed: {exc}") from exc
+
+    candidate: dict[str, Any] = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "refresh_token": token_payload["refresh_token"],
+    }
+    if base_url:
+        candidate["base_url"] = base_url
+
+    secrets.put("aphrodite/clio", candidate)
+    return run_check("clio", secrets)

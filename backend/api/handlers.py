@@ -602,6 +602,26 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
             return _response(400, {"error": str(exc)})
         return _response(200, result)
 
+    if method == "POST" and path.endswith("/connectors/clio/authorize-url"):
+        forbidden = _require_admin(event)
+        if forbidden:
+            return forbidden
+        try:
+            result = connectors_admin.clio_authorize_url(_body(event))
+        except connectors_admin.ConnectorValidationError as exc:
+            return _response(400, {"error": str(exc)})
+        return _response(200, result)
+
+    if method == "POST" and path.endswith("/connectors/clio/exchange"):
+        forbidden = _require_admin(event)
+        if forbidden:
+            return forbidden
+        try:
+            result = connectors_admin.clio_exchange(deps.secrets, _body(event))
+        except connectors_admin.ConnectorValidationError as exc:
+            return _response(400, {"error": str(exc)})
+        return _response(200, result)
+
     return _response(404, {"error": "not found"})
 
 

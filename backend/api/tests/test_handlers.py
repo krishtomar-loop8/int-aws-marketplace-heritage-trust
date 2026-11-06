@@ -531,3 +531,42 @@ def test_connect_graph_route_success(monkeypatch: pytest.MonkeyPatch) -> None:
         )
     )
     assert resp["statusCode"] == 200
+
+
+def test_clio_authorize_url_route_requires_admin(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_deps(monkeypatch)
+    resp = handlers.handler(api_event("POST", "/connectors/clio/authorize-url", body={}))
+    assert resp["statusCode"] == 403
+
+
+def test_clio_authorize_url_route_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_deps(monkeypatch)
+    monkeypatch.setattr(
+        handlers.connectors_admin, "clio_authorize_url",
+        lambda body: {"url": "https://app.clio.com/oauth/authorize?x", "state": "s"},
+    )
+    resp = handlers.handler(
+        admin_api_event("POST", "/connectors/clio/authorize-url", body={"client_id": "abc"})
+    )
+    assert resp["statusCode"] == 200
+
+
+def test_clio_exchange_route_requires_admin(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_deps(monkeypatch)
+    resp = handlers.handler(api_event("POST", "/connectors/clio/exchange", body={}))
+    assert resp["statusCode"] == 403
+
+
+def test_clio_exchange_route_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_deps(monkeypatch)
+    monkeypatch.setattr(
+        handlers.connectors_admin, "clio_exchange",
+        lambda secrets, body: {"ok": True, "detail": "ok"},
+    )
+    resp = handlers.handler(
+        admin_api_event(
+            "POST", "/connectors/clio/exchange",
+            body={"client_id": "c", "client_secret": "s", "code": "code123"},
+        )
+    )
+    assert resp["statusCode"] == 200
