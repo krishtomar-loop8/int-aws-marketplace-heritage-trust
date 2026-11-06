@@ -10,6 +10,6 @@ Python AWS Lambda handlers and **read-only** source connectors.
 
 | Env / Terraform var | Default | Purpose |
 |---|---|---|
-| `APHRODITE_ORG_NAME` (`org_name`) | `"Aphrodite"` | Organization name used in the matter-search system prompt and the AML own-company exclusion check |
+| `APHRODITE_ORG_NAME` (`org_name`) | `"Aphrodite"` | Organization name used in the matter-search system prompt. Does **not** drive the AML own-company exclusion check — see `APHRODITE_OWN_COMPANY_NAMES` in the [AML export README](lambdas/aml_export/README.md) |
 | `APHRODITE_ORG_OFFICE_ADDRESS` (`org_office_address`) | `"545 Clyde Avenue, West Vancouver"` | Office address used by the system prompt's care-of/mailing-address rule |
 | `APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS` (`excluded_sharepoint_folders`, JSON list) | `["hr", "human resources", "finance"]` | SharePoint folder names excluded from search results and from the crawler's index |
