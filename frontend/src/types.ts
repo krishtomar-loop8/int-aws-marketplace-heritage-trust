@@ -255,6 +255,14 @@ export interface IntegrationsHealth {
   alerting: boolean; // any integration down for ≥ 2 consecutive checks
 }
 
+// Shared result shape for the credential-form connect routes (Estateably,
+// Graph, Clio exchange) — each validates live and returns the health check's
+// own ok/detail, not just a bare success flag.
+export interface ConnectorActionResult {
+  ok: boolean;
+  detail: string;
+}
+
 // The mandatory report sections, in order (mirrors framework.SECTION_KEYS).
 export const SECTION_ORDER: { key: string; title: string }[] = [
   { key: "current_stage", title: "Current stage" },

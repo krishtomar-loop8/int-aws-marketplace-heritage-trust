@@ -1,10 +1,13 @@
+import { Fragment, useState } from "react";
+import { ConnectorCard } from "./ConnectorCard";
 import { useIntegrationsHealth } from "../lib/integrationsHealth";
 import type { IntegrationStatus, IntegrationTransition } from "../types";
 
 // The Integrations tab — live health of every connected source system from the
 // scheduled probe. Shows each connector's status, when it was last checked, and,
 // when one is down, the error plus a plain-language suggested fix. A downtime log
-// below records every up↔down change. Read-only; nothing here changes a connector.
+// below records every up↔down change. Read-only for everyone except admins, who
+// get a Connect/Reconnect control per connector (see ConnectorCard).
 
 const LABELS: Record<string, string> = {
   clio: "Clio",
@@ -13,6 +16,11 @@ const LABELS: Record<string, string> = {
   quickbooks: "QuickBooks",
   sharepoint: "SharePoint",
 };
+
+// The four connectors ConnectorCard knows how to connect/reconnect — "sharepoint"
+// is a separately-tracked health row with no connect form of its own (it shares
+// the "graph" credential).
+const CONNECTABLE = new Set(["clio", "estateably", "graph", "quickbooks"]);
 
 function label(id: string): string {
   return LABELS[id] ?? id;
@@ -39,7 +47,17 @@ function absoluteTime(iso?: string): string {
   return Number.isNaN(t) ? iso : new Date(t).toLocaleString();
 }
 
-function StatusRow({ row }: { row: IntegrationStatus }) {
+function StatusRow({
+  row,
+  isAdmin,
+  expanded,
+  onToggle,
+}: {
+  row: IntegrationStatus;
+  isAdmin: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
   return (
     <tr>
       <td>
@@ -75,6 +93,15 @@ function StatusRow({ row }: { row: IntegrationStatus }) {
           </>
         )}
       </td>
+      {isAdmin && (
+        <td>
+          {CONNECTABLE.has(row.integration) && (
+            <button className="link-btn ghost" onClick={onToggle}>
+              {expanded ? "Close" : row.checked_at ? "Reconnect" : "Connect"}
+            </button>
+          )}
+        </td>
+      )}
     </tr>
   );
 }
@@ -99,10 +126,23 @@ function LogRow({ entry }: { entry: IntegrationTransition }) {
   );
 }
 
-export function IntegrationsPanel() {
+export function IntegrationsPanel({
+  apiBase,
+  token,
+  isAdmin = false,
+}: {
+  apiBase: string;
+  token?: string;
+  isAdmin?: boolean;
+}) {
   const { health, loading, refresh } = useIntegrationsHealth();
   const { integrations, log, alerting } = health;
   const down = integrations.filter((i) => !i.ok);
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  function toggle(integration: string) {
+    setExpanded((cur) => (cur === integration ? null : integration));
+  }
 
   return (
     <div className="reports">
@@ -140,10 +180,26 @@ export function IntegrationsPanel() {
       )}
 
       {!loading && integrations.length === 0 && (
-        <p className="banner banner-warn">
-          No health checks recorded yet. The hourly connector check populates this once it is
-          enabled — status will appear here after the first run.
-        </p>
+        <>
+          <p className="banner banner-warn">
+            No health checks recorded yet. The hourly connector check populates this once it is
+            enabled — status will appear here after the first run.
+          </p>
+          {isAdmin && (
+            <div className="reports">
+              <p className="reports-lede">
+                You don't need to wait for the first check to connect a source — use any of the
+                forms below.
+              </p>
+              {Array.from(CONNECTABLE).map((integration) => (
+                <div key={integration} className="connector-card-block">
+                  <h3>{label(integration)}</h3>
+                  <ConnectorCard integration={integration} apiBase={apiBase} token={token} />
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
 
       {integrations.length > 0 && (
@@ -155,11 +211,26 @@ export function IntegrationsPanel() {
                 <th>Status</th>
                 <th>Last checked</th>
                 <th>Details</th>
+                {isAdmin && <th>Setup</th>}
               </tr>
             </thead>
             <tbody>
               {integrations.map((row) => (
-                <StatusRow key={row.integration} row={row} />
+                <Fragment key={row.integration}>
+                  <StatusRow
+                    row={row}
+                    isAdmin={isAdmin}
+                    expanded={expanded === row.integration}
+                    onToggle={() => toggle(row.integration)}
+                  />
+                  {isAdmin && expanded === row.integration && CONNECTABLE.has(row.integration) && (
+                    <tr>
+                      <td colSpan={5}>
+                        <ConnectorCard integration={row.integration} apiBase={apiBase} token={token} />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               ))}
             </tbody>
           </table>

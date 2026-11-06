@@ -633,6 +633,15 @@ body {
 .schedule-status { margin: 0; color: #45514d; font-size: 0.9rem; max-width: 62ch; }
 .schedule-card .reports-controls { margin: 0.9rem 0 0; }
 
+/* Connector onboarding: per-connector connect/reconnect form (admins only) */
+.connector-card {
+  border: 1px solid var(--line); border-radius: var(--radius); background: #fbfbf8;
+  padding: 1rem 1.1rem; display: flex; flex-direction: column; gap: 0.7rem; max-width: 420px;
+}
+.connector-card-hint { margin: 0; color: #6b7a75; font-size: 0.82rem; }
+.connector-card-block { margin: 0 0 1.3rem; }
+.connector-card-block h3 { margin: 0 0 0.5rem; font-size: 0.95rem; color: var(--forest-2); }
+
 /* Bold caution under the AML description — review the export before relying on it. */
 .reports-caution {
   margin: 0.7rem 0 0; padding: 0.55rem 0.8rem; max-width: 64ch;

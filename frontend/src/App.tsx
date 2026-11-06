@@ -18,12 +18,14 @@ export function App({
   mock,
   user,
   onSignOut,
+  isAdmin,
 }: {
   apiBase: string;
   token?: string;
   mock: boolean;
   user?: string;
   onSignOut?: () => void;
+  isAdmin?: boolean;
 }) {
   const [activeTab, setActiveTab] = useState<TabId>(DEFAULT_TAB);
   const [collapsed, setCollapsed] = useState(false); // desktop rail
@@ -85,7 +87,7 @@ export function App({
               ) : activeTab === "activity-log" ? (
                 <ActivityLogPanel apiBase={apiBase} token={token} mock={mock} />
               ) : activeTab === "integrations" ? (
-                <IntegrationsPanel />
+                <IntegrationsPanel apiBase={apiBase} token={token} isAdmin={isAdmin} />
               ) : (
                 <Placeholder tab={active} />
               )}

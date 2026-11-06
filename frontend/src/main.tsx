@@ -38,6 +38,9 @@ function AuthedApp({ config }: { config: AppConfig }) {
     );
   }
 
+  const groups = auth.user?.profile?.["cognito:groups"];
+  const isAdmin = Array.isArray(groups) && groups.includes("admins");
+
   return (
     <App
       apiBase={config.apiEndpoint}
@@ -47,6 +50,7 @@ function AuthedApp({ config }: { config: AppConfig }) {
       token={auth.user?.id_token}
       mock={false}
       user={(auth.user?.profile.email as string) ?? undefined}
+      isAdmin={isAdmin}
       onSignOut={() => {
         clearThread(); // don't leave client matter data for the next user on this tab
         void auth.removeUser().then(() => window.location.reload());

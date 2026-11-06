@@ -6,6 +6,7 @@ import type {
   AmlExportEntry,
   AmlSchedule,
   CertificateEntry,
+  ConnectorActionResult,
   IntegrationsHealth,
   Matter,
   MatterSelection,
@@ -320,4 +321,91 @@ export async function deleteCertificate(base: string, key: string, token?: strin
     headers: authHeaders(token),
   });
   if (!res.ok) throw new Error(`Failed to delete certificate (${res.status})`);
+}
+
+// -- Connector onboarding / reconnect (admin-only Setup screen) --------------
+
+export async function connectEstateably(
+  base: string,
+  body: { username: string; password: string; base_url?: string },
+  token?: string,
+): Promise<ConnectorActionResult> {
+  const res = await fetch(`${base}/connectors/estateably`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null);
+    throw new Error(detail?.error || `Failed to connect Estateably (${res.status})`);
+  }
+  return (await res.json()) as ConnectorActionResult;
+}
+
+export async function connectGraph(
+  base: string,
+  body: { tenant_id: string; client_id: string; client_secret: string },
+  token?: string,
+): Promise<ConnectorActionResult> {
+  const res = await fetch(`${base}/connectors/graph`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null);
+    throw new Error(detail?.error || `Failed to connect Graph (${res.status})`);
+  }
+  return (await res.json()) as ConnectorActionResult;
+}
+
+export async function clioAuthorizeUrl(
+  base: string,
+  body: { client_id: string },
+  token?: string,
+): Promise<{ url: string; state: string }> {
+  const res = await fetch(`${base}/connectors/clio/authorize-url`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null);
+    throw new Error(detail?.error || `Failed to build the Clio authorize link (${res.status})`);
+  }
+  return (await res.json()) as { url: string; state: string };
+}
+
+export async function clioExchange(
+  base: string,
+  body: { client_id: string; client_secret: string; code: string },
+  token?: string,
+): Promise<ConnectorActionResult> {
+  const res = await fetch(`${base}/connectors/clio/exchange`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null);
+    throw new Error(detail?.error || `Failed to connect Clio (${res.status})`);
+  }
+  return (await res.json()) as ConnectorActionResult;
+}
+
+export async function quickbooksStart(
+  base: string,
+  body: { client_id: string; client_secret: string; environment: string },
+  token?: string,
+): Promise<{ url: string }> {
+  const res = await fetch(`${base}/connectors/quickbooks/start`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null);
+    throw new Error(detail?.error || `Failed to connect QuickBooks (${res.status})`);
+  }
+  return (await res.json()) as { url: string };
 }
