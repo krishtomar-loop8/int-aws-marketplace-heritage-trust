@@ -54,11 +54,11 @@ class GraphConnector:
 
     # -- authentication -------------------------------------------------
 
-    def _credentials(self) -> dict[str, Any]:
-        return self._secrets.get(self._secret_name)
+    def _credentials(self, *, refresh: bool = False) -> dict[str, Any]:
+        return self._secrets.get(self._secret_name, refresh=refresh)
 
-    def _fetch_token(self) -> None:
-        creds = self._credentials()
+    def _fetch_token(self, *, refresh_secret: bool = False) -> None:
+        creds = self._credentials(refresh=refresh_secret)
         tenant_id = creds["tenant_id"]
         token_url = f"{_LOGIN_BASE}/{tenant_id}/oauth2/v2.0/token"
         data = {
@@ -79,7 +79,7 @@ class GraphConnector:
 
     def _ensure_token(self, *, force: bool = False) -> str:
         if force or self._token is None or time.monotonic() >= self._token_expiry:
-            self._fetch_token()
+            self._fetch_token(refresh_secret=force)
         assert self._token is not None
         return self._token
 

@@ -29,9 +29,11 @@ class FakeSecretsClient:
             "client_secret": "shh",
         }
         self.calls = 0
+        self.get_calls: list[tuple[str, bool]] = []
 
     def get(self, name: str, *, refresh: bool = False) -> dict[str, Any]:
         self.calls += 1
+        self.get_calls.append((name, refresh))
         return self._secret
 
 
@@ -207,6 +209,27 @@ def test_401_triggers_token_refresh_and_retry() -> None:
     # Retry used the refreshed bearer token.
     last_get = [c for c in responses.calls if c.request.url == f"{BASE}/users/u1"][-1]
     assert last_get.request.headers["Authorization"] == "Bearer tok-2"
+
+
+@responses.activate
+def test_401_after_reconnect_uses_fresh_secret_not_cache() -> None:
+    # Simulates: container warm with old creds, admin reconnects (secret
+    # changes in Secrets Manager), next call 401s on the stale cached token,
+    # and the forced refresh must re-read the secret rather than reusing the
+    # cache.
+    secrets = FakeSecretsClient({"tenant_id": TENANT_ID, "client_id": "old-id", "client_secret": "old-secret"})
+    connector = GraphConnector(secrets)
+    _add_token(token="tok-1")
+    connector._ensure_token()
+
+    secrets._secret = {"tenant_id": TENANT_ID, "client_id": "new-id", "client_secret": "new-secret"}
+    responses.add(responses.GET, f"{BASE}/users/u1", json={"error": "unauth"}, status=401)
+    _add_token(token="tok-2")  # only matches if the forced refresh used the NEW creds
+    responses.add(responses.GET, f"{BASE}/users/u1", json={"id": "u1"}, status=200)
+
+    connector.get_user("u1")
+
+    assert secrets.get_calls[-1] == ("aphrodite/graph", True)
 
 
 @responses.activate

@@ -30,9 +30,11 @@ class FakeSecrets:
     def __init__(self, secret: dict[str, Any]) -> None:
         self._secret = secret
         self.calls: list[str] = []
+        self.get_calls: list[tuple[str, bool]] = []
 
     def get(self, name: str, *, refresh: bool = False) -> dict[str, Any]:
         self.calls.append(name)
+        self.get_calls.append((name, refresh))
         return self._secret
 
 
@@ -409,6 +411,37 @@ def test_expired_token_triggers_reauth_and_retry():
 
     final_get = [c for c in responses.calls if c.request.method == "GET"][-1]
     assert final_get.request.headers["Authorization"] == f"Bearer {TOKEN_2}"
+
+
+@responses.activate
+def test_401_after_reconnect_uses_fresh_secret_not_cache():
+    # Simulates: container warm with old creds, admin reconnects (secret
+    # changes in Secrets Manager), next call 401s on the stale cached creds,
+    # and the retry must re-read the secret rather than reusing the cache.
+    secrets = FakeSecrets({"username": "old", "password": "old-pw", "base_url": BASE_URL})
+    http = HttpClient(sleep=lambda _s: None)
+    connector = EstateablyConnector(secrets, http=http)
+    add_login(token=TOKEN)
+    connector._login()
+
+    secrets._secret = {"username": "new", "password": "new-pw", "base_url": BASE_URL}
+    responses.add(
+        responses.GET,
+        f"{BASE_URL}/api/v1/globalSearch",
+        json={"errors": [{"status": "401"}]},
+        status=401,
+    )
+    add_login(token=TOKEN_2)  # only matches if the retry used the NEW creds
+    responses.add(
+        responses.GET,
+        f"{BASE_URL}/api/v1/globalSearch",
+        json={"data": []},
+        status=200,
+    )
+
+    connector.global_search("x")
+
+    assert secrets.get_calls[-1] == ("aphrodite/estateably", True)
 
 
 @responses.activate

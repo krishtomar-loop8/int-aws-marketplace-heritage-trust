@@ -81,8 +81,8 @@ class EstateablyConnector:
 
     # -- credentials / auth ------------------------------------------------
 
-    def _credentials(self) -> dict[str, Any]:
-        return self._secrets.get(self._secret_name)
+    def _credentials(self, *, refresh: bool = False) -> dict[str, Any]:
+        return self._secrets.get(self._secret_name, refresh=refresh)
 
     @property
     def base_url(self) -> str:
@@ -95,13 +95,16 @@ class EstateablyConnector:
                 self._base_url = str(configured).rstrip("/") if configured else DEFAULT_BASE_URL
         return self._base_url
 
-    def _login(self) -> str:
+    def _login(self, *, refresh_secret: bool = False) -> str:
         """Authenticate with username/password and return a fresh JWT.
 
         This is the only non-GET request the connector makes. The token is read
         from ``data.attributes.token`` per the Estateably login schema.
+        ``refresh_secret`` forces a fresh Secrets Manager read instead of the
+        cached value — used on a 401 retry so a reconnected (changed) secret
+        takes effect immediately rather than only after a cold start.
         """
-        creds = self._credentials()
+        creds = self._credentials(refresh=refresh_secret)
         username = creds.get("username")
         password = creds.get("password")
         if not (username and password):
@@ -180,7 +183,7 @@ class EstateablyConnector:
                 raise
             logger.info("Estateably token expired; re-authenticating")
             self._token = None
-            self._login()
+            self._login(refresh_secret=True)
             headers = self._headers()
             if extra_headers:
                 headers.update(extra_headers)
