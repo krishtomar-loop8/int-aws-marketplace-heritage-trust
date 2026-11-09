@@ -567,6 +567,28 @@ def test_connect_estateably_route_success(monkeypatch: pytest.MonkeyPatch) -> No
     assert resp["statusCode"] == 200
 
 
+def test_capabilities_route_reflects_deps(monkeypatch: pytest.MonkeyPatch) -> None:
+    deps, _ = install_deps(monkeypatch)
+    deps.connectors_enabled = frozenset({"clio"})
+    deps.reports = None
+    deps.aml_exports = object()
+    deps.screener = None
+    resp = handlers.handler(api_event("GET", "/capabilities"))
+    assert resp["statusCode"] == 200
+    body = json.loads(resp["body"])
+    assert body["connectors"] == {
+        "clio": True,
+        "estateably": False,
+        "quickbooks": False,
+        "graph": False,
+    }
+    assert body["modules"] == {
+        "quarterly_reports": False,
+        "aml_export": True,
+        "sanction_screener": False,
+    }
+
+
 def test_connect_estateably_route_rejects_disabled_connector(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

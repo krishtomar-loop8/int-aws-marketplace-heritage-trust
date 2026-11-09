@@ -506,6 +506,7 @@ resource "aws_apigatewayv2_route" "routes" {
     "DELETE /screener/certificates",
     "GET /activity",
     "GET /integrations",
+    "GET /capabilities",
     "POST /connectors/estateably",
     "POST /connectors/graph",
     "POST /connectors/clio/authorize-url",

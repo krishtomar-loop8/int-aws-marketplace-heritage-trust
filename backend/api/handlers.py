@@ -627,6 +627,18 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
             return _response(503, {"error": "integration health not configured"})
         return _response(200, deps.integrations.snapshot())
 
+    if method == "GET" and path.endswith("/capabilities"):
+        connectors = {
+            name: name in deps.connectors_enabled
+            for name in ("clio", "estateably", "quickbooks", "graph")
+        }
+        modules = {
+            "quarterly_reports": deps.reports is not None,
+            "aml_export": deps.aml_exports is not None,
+            "sanction_screener": deps.screener is not None,
+        }
+        return _response(200, {"modules": modules, "connectors": connectors})
+
     # -- Connector onboarding / reconnect (admin-gated credential writes) ---
     if method == "POST" and path.endswith("/connectors/estateably"):
         if "estateably" not in deps.connectors_enabled:
