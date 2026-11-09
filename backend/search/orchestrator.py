@@ -173,6 +173,9 @@ class MatterDossier:
     # Per-source fan-out wall-time (ms), for latency instrumentation. Not serialized
     # into the synthesis prompt / API — surfaced only in the search.completed audit.
     timings: dict[str, float] = field(default_factory=dict)
+    # Connectors this deployment turned off (Phase 2 modular architecture) — never
+    # attempted, so distinct from a source that was queried and failed/was absent.
+    disabled_sources: frozenset[str] = field(default_factory=frozenset)
 
     def section(self, key: str) -> DossierSection:
         return self.sections.setdefault(key, DossierSection(key=key))
@@ -200,6 +203,7 @@ class MatterDossier:
             },
             "sources_reviewed": self.sources_reviewed,
             "errors": self.errors,
+            "disabled_sources": sorted(self.disabled_sources),
         }
 
 
@@ -930,6 +934,16 @@ class DossierBuilder:
             matter_name=_matter_title(candidate, ref_ids),
             matter_type=candidate.matter_type,
             refs=candidate.refs,
+        )
+        dossier.disabled_sources = frozenset(
+            name
+            for name, connector in (
+                ("estateably", self._estateably),
+                ("clio", self._clio),
+                ("quickbooks", self._quickbooks),
+                ("graph", self._graph),
+            )
+            if connector is None
         )
 
         is_trust = estateably_is_trust(candidate.matter_type, candidate.name)

@@ -19,3 +19,8 @@ def test_render_framework_custom_org():
     assert "c/o Acme Trust (mailing address)" in text
     assert "1 Main St" in text
     assert "Aphrodite" not in text
+
+
+def test_framework_distinguishes_disabled_sources_from_gaps():
+    text = render_framework()
+    assert "disabled_sources" in text

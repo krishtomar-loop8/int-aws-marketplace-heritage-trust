@@ -368,6 +368,36 @@ def test_only_available_sources_are_used() -> None:
     assert {i.system for sec in d.sections.values() for i in sec.items} == {"estateably"}
 
 
+def test_build_marks_disabled_connectors_distinct_from_candidate_gaps() -> None:
+    builder = DossierBuilder(estateably=None, clio=FakeClio(), quickbooks=None, graph=None)
+    candidate = MatterCandidate(
+        name="Smith Estate",
+        refs=[SourceRef("clio", "123", "Smith")],
+        matter_type="estate",
+        score=1.0,
+    )
+    dossier = builder.build(candidate)
+    assert dossier.disabled_sources == frozenset({"estateably", "quickbooks", "graph"})
+    assert "clio" not in dossier.disabled_sources
+
+
+def test_build_with_all_connectors_disabled_does_not_crash() -> None:
+    # Review Focus: Matter Search itself is never toggleable, so this
+    # combination (every connector off) is reachable and must degrade
+    # honestly rather than raise.
+    builder = DossierBuilder(estateably=None, clio=None, quickbooks=None, graph=None)
+    candidate = MatterCandidate(
+        name="Smith Estate",
+        refs=[SourceRef("clio", "123", "Smith")],
+        matter_type="estate",
+        score=1.0,
+    )
+    dossier = builder.build(candidate)
+    assert dossier.disabled_sources == frozenset({"estateably", "clio", "quickbooks", "graph"})
+    assert dossier.errors == []  # nothing was attempted, so nothing failed
+    assert dossier.as_dict()["disabled_sources"]
+
+
 def _est_http_error(status: int, title: str, estate_id: str = "E1") -> HttpError:
     return HttpError(
         f"GET https://x/api/v1/estates/{estate_id}/summary failed: {status}",
