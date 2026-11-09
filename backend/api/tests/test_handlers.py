@@ -91,6 +91,45 @@ def api_event(
     }
 
 
+# -- _build_deps / modular flags ---------------------------------------------
+
+
+def test_build_deps_skips_disabled_connectors(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APHRODITE_JOBS_TABLE", "jobs")
+    monkeypatch.setenv("APHRODITE_SELF_FUNCTION", "fn")
+    monkeypatch.setenv("APHRODITE_ESTATEABLY_ENABLED", "false")
+    deps = handlers._build_deps()
+    assert "estateably" not in deps.connectors_enabled
+    assert "clio" in deps.connectors_enabled  # unset env var defaults to enabled
+
+
+def test_build_deps_all_connectors_enabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APHRODITE_JOBS_TABLE", "jobs")
+    monkeypatch.setenv("APHRODITE_SELF_FUNCTION", "fn")
+    deps = handlers._build_deps()
+    assert deps.connectors_enabled == frozenset({"clio", "estateably", "quickbooks", "graph"})
+
+
+def test_build_deps_reports_disabled_when_quarterly_function_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APHRODITE_JOBS_TABLE", "jobs")
+    monkeypatch.setenv("APHRODITE_SELF_FUNCTION", "fn")
+    monkeypatch.setenv("APHRODITE_OUTPUTS_BUCKET", "bucket")
+    monkeypatch.delenv("APHRODITE_QUARTERLY_FUNCTION", raising=False)
+    deps = handlers._build_deps()
+    assert deps.reports is None  # outputs_bucket alone is no longer enough
+
+
+def test_build_deps_screener_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APHRODITE_JOBS_TABLE", "jobs")
+    monkeypatch.setenv("APHRODITE_SELF_FUNCTION", "fn")
+    monkeypatch.setenv("APHRODITE_OUTPUTS_BUCKET", "bucket")
+    monkeypatch.delenv("APHRODITE_SANCTION_SCREENER_ENABLED", raising=False)
+    deps = handlers._build_deps()
+    assert deps.screener is None
+
+
 # -- routing ----------------------------------------------------------------
 
 
@@ -526,6 +565,17 @@ def test_connect_estateably_route_success(monkeypatch: pytest.MonkeyPatch) -> No
         admin_api_event("POST", "/connectors/estateably", body={"username": "u", "password": "p"})
     )
     assert resp["statusCode"] == 200
+
+
+def test_connect_estateably_route_rejects_disabled_connector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deps, _ = install_deps(monkeypatch)
+    deps.connectors_enabled = frozenset({"clio"})  # estateably disabled
+    resp = handlers.handler(
+        admin_api_event("POST", "/connectors/estateably", body={"username": "u", "password": "p"})
+    )
+    assert resp["statusCode"] == 503
 
 
 def test_connect_estateably_route_records_activity_against_the_real_signature(

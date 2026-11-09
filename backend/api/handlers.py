@@ -89,6 +89,7 @@ class Deps:
     activity: ActivityLog | None = None
     integrations: IntegrationHealthStore | None = None
     secrets: SecretsClient | None = None
+    connectors_enabled: frozenset[str] = frozenset({"clio", "estateably", "quickbooks", "graph"})
 
 
 _DEPS: Deps | None = None  # cold-start cache / test injection point
@@ -112,11 +113,25 @@ def _build_deps(*, model_id: str | None = None) -> Deps:
     from services.llm import BedrockLLM
     from services.secrets import SecretsClient
 
+    def _flag(name: str) -> bool:
+        return os.environ.get(name, "true").lower() != "false"
+
+    connectors_enabled = frozenset(
+        name
+        for name, env in (
+            ("clio", "APHRODITE_CLIO_ENABLED"),
+            ("estateably", "APHRODITE_ESTATEABLY_ENABLED"),
+            ("quickbooks", "APHRODITE_QUICKBOOKS_ENABLED"),
+            ("graph", "APHRODITE_GRAPH_ENABLED"),
+        )
+        if _flag(env)
+    )
+
     secrets = SecretsClient(boto3.client("secretsmanager", region_name=REGION))
-    estateably = EstateablyConnector(secrets)
-    clio = ClioConnector(secrets)
-    graph = GraphConnector(secrets)
-    quickbooks = QuickBooksConnector(secrets)
+    estateably = EstateablyConnector(secrets) if "estateably" in connectors_enabled else None
+    clio = ClioConnector(secrets) if "clio" in connectors_enabled else None
+    graph = GraphConnector(secrets) if "graph" in connectors_enabled else None
+    quickbooks = QuickBooksConnector(secrets) if "quickbooks" in connectors_enabled else None
     # SharePoint documents come from a Bedrock Knowledge Base (full-body index
     # built by the crawler Lambda). Unset ⇒ SharePoint retrieval is skipped.
     kb_id = os.environ.get("APHRODITE_SHAREPOINT_KB_ID")
@@ -154,10 +169,16 @@ def _build_deps(*, model_id: str | None = None) -> Deps:
     # /reports routes report "not configured" rather than erroring.
     outputs_bucket = os.environ.get("APHRODITE_OUTPUTS_BUCKET")
     s3 = boto3.client("s3", region_name=REGION) if outputs_bucket else None
-    reports = ReportsService(s3, outputs_bucket) if s3 else None
+    # Module flags (Phase 2): the module's Lambda is only present when its
+    # module is deployed, so an absent function name — not just a missing
+    # bucket — gates these services off.
+    quarterly_fn = os.environ.get("APHRODITE_QUARTERLY_FUNCTION")
+    aml_export_fn = os.environ.get("APHRODITE_AML_EXPORT_FUNCTION")
+    screener_enabled = os.environ.get("APHRODITE_SANCTION_SCREENER_ENABLED", "false").lower() != "false"
+    reports = ReportsService(s3, outputs_bucket) if s3 and quarterly_fn else None
     # AML export drafts (D6) live in the same outputs bucket, under aml/ instead
     # of quarterly/ — no separate bucket or client needed.
-    aml_exports = AmlExportsService(s3, outputs_bucket) if s3 else None
+    aml_exports = AmlExportsService(s3, outputs_bucket) if s3 and aml_export_fn else None
     # Sanction Screener: screens uploaded name lists against the watchlist bundle
     # (loaded from the reference bucket, packaged fallback) and writes Certificates
     # of Search to the same outputs bucket under screener/. The matcher is built
@@ -169,7 +190,7 @@ def _build_deps(*, model_id: str | None = None) -> Deps:
             sanctions_bucket=os.environ.get("APHRODITE_SANCTIONS_BUCKET"),
             kms_key_id=os.environ.get("APHRODITE_OUTPUTS_KMS_KEY_ID"),
         )
-        if s3 and outputs_bucket
+        if s3 and outputs_bucket and screener_enabled
         else None
     )
 
@@ -186,12 +207,10 @@ def _build_deps(*, model_id: str | None = None) -> Deps:
     # Temporary on-demand quarterly generation for the portal (until the schedule
     # is on): list open Clio matters + async-invoke the quarterly Lambda by name.
     matters = MattersService(clio)
-    quarterly_fn = os.environ.get("APHRODITE_QUARTERLY_FUNCTION")
     quarterly = QuarterlyTrigger(lambda_client, quarterly_fn) if quarterly_fn else None
 
     # AML Export tab: on-demand "run now" (async-invoke the AML export Lambda) and
     # a self-serve monthly schedule (read/update its EventBridge Scheduler schedule).
-    aml_export_fn = os.environ.get("APHRODITE_AML_EXPORT_FUNCTION")
     aml_trigger = AmlExportTrigger(lambda_client, aml_export_fn) if aml_export_fn else None
     aml_schedule_name = os.environ.get("APHRODITE_AML_SCHEDULE_NAME")
     aml_schedule = (
@@ -247,6 +266,7 @@ def _build_deps(*, model_id: str | None = None) -> Deps:
         activity,
         integrations,
         secrets=secrets,
+        connectors_enabled=connectors_enabled,
     )
 
 
@@ -609,6 +629,8 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
 
     # -- Connector onboarding / reconnect (admin-gated credential writes) ---
     if method == "POST" and path.endswith("/connectors/estateably"):
+        if "estateably" not in deps.connectors_enabled:
+            return _response(503, {"error": "estateably disabled for this deployment"})
         forbidden = _require_admin(event)
         if forbidden:
             return forbidden
@@ -622,6 +644,8 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
         return _response(200, result)
 
     if method == "POST" and path.endswith("/connectors/graph"):
+        if "graph" not in deps.connectors_enabled:
+            return _response(503, {"error": "graph disabled for this deployment"})
         forbidden = _require_admin(event)
         if forbidden:
             return forbidden
@@ -635,6 +659,8 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
         return _response(200, result)
 
     if method == "POST" and path.endswith("/connectors/clio/authorize-url"):
+        if "clio" not in deps.connectors_enabled:
+            return _response(503, {"error": "clio disabled for this deployment"})
         forbidden = _require_admin(event)
         if forbidden:
             return forbidden
@@ -645,6 +671,8 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
         return _response(200, result)
 
     if method == "POST" and path.endswith("/connectors/clio/exchange"):
+        if "clio" not in deps.connectors_enabled:
+            return _response(503, {"error": "clio disabled for this deployment"})
         forbidden = _require_admin(event)
         if forbidden:
             return forbidden
@@ -658,6 +686,8 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
         return _response(200, result)
 
     if method == "POST" and path.endswith("/connectors/quickbooks/start"):
+        if "quickbooks" not in deps.connectors_enabled:
+            return _response(503, {"error": "quickbooks disabled for this deployment"})
         forbidden = _require_admin(event)
         if forbidden:
             return forbidden
@@ -678,6 +708,8 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
     # so this route is intentionally not admin-gated (the `state` minted by
     # /connectors/quickbooks/start is what protects it; see connectors_admin).
     if method == "GET" and path.endswith("/connectors/quickbooks/callback"):
+        if "quickbooks" not in deps.connectors_enabled:
+            return _response(503, {"error": "quickbooks disabled for this deployment"})
         query = event.get("queryStringParameters") or {}
         url = connectors_admin.quickbooks_callback(
             deps.secrets,
