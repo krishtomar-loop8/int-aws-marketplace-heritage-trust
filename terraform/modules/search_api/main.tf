@@ -150,36 +150,50 @@ data "aws_iam_policy_document" "search" {
   statement {
     sid       = "ReadSecrets"
     actions   = ["secretsmanager:GetSecretValue"]
-    resources = var.secret_arns
+    resources = [for arn in var.secret_arns : arn if arn != ""]
   }
-  statement {
-    # QuickBooks rotates its OAuth refresh token on every refresh and invalidates
-    # the prior one; the connector persists the rotated value so it survives cold
-    # starts. Write scoped to the QuickBooks secret only.
-    sid       = "WriteQuickBooksToken"
-    actions   = ["secretsmanager:PutSecretValue"]
-    resources = [var.quickbooks_secret_arn]
+  # QuickBooks rotates its OAuth refresh token on every refresh and invalidates
+  # the prior one; the connector persists the rotated value so it survives cold
+  # starts. Write scoped to the QuickBooks secret only — and only granted when
+  # the connector is enabled (a disabled connector's secret is paused, not
+  # destroyed, so it's simply never written to).
+  dynamic "statement" {
+    for_each = var.quickbooks_secret_arn != "" ? [1] : []
+    content {
+      sid       = "WriteQuickBooksToken"
+      actions   = ["secretsmanager:PutSecretValue"]
+      resources = [var.quickbooks_secret_arn]
+    }
   }
-  statement {
-    # Clio likewise rotates its OAuth refresh token on refresh; the connector
-    # persists the rotated value so it survives cold starts (without this the
-    # stored token goes stale and paginated Clio calls 401). Scoped to Clio only.
-    sid       = "WriteClioToken"
-    actions   = ["secretsmanager:PutSecretValue"]
-    resources = [var.clio_secret_arn]
+  # Clio likewise rotates its OAuth refresh token on refresh; the connector
+  # persists the rotated value so it survives cold starts (without this the
+  # stored token goes stale and paginated Clio calls 401). Scoped to Clio only.
+  dynamic "statement" {
+    for_each = var.clio_secret_arn != "" ? [1] : []
+    content {
+      sid       = "WriteClioToken"
+      actions   = ["secretsmanager:PutSecretValue"]
+      resources = [var.clio_secret_arn]
+    }
   }
   # Connector onboarding: the admin-gated /connectors/* routes write a
   # freshly-validated credential to each connector's own secret. Scoped one
   # statement per secret, same discipline as the OAuth-rotation writes above.
-  statement {
-    sid       = "WriteEstateablyCredential"
-    actions   = ["secretsmanager:PutSecretValue"]
-    resources = [var.estateably_secret_arn]
+  dynamic "statement" {
+    for_each = var.estateably_secret_arn != "" ? [1] : []
+    content {
+      sid       = "WriteEstateablyCredential"
+      actions   = ["secretsmanager:PutSecretValue"]
+      resources = [var.estateably_secret_arn]
+    }
   }
-  statement {
-    sid       = "WriteGraphCredential"
-    actions   = ["secretsmanager:PutSecretValue"]
-    resources = [var.graph_secret_arn]
+  dynamic "statement" {
+    for_each = var.graph_secret_arn != "" ? [1] : []
+    content {
+      sid       = "WriteGraphCredential"
+      actions   = ["secretsmanager:PutSecretValue"]
+      resources = [var.graph_secret_arn]
+    }
   }
   statement {
     sid       = "PublishIntegrationsAlert"
@@ -379,6 +393,11 @@ resource "aws_lambda_function" "search" {
       APHRODITE_QUICKBOOKS_REDIRECT_URI      = "${aws_apigatewayv2_api.search.api_endpoint}/connectors/quickbooks/callback"
       APHRODITE_APP_BASE_URL                 = var.app_base_url
       APHRODITE_INTEGRATIONS_ALERT_TOPIC_ARN = aws_sns_topic.integrations_alert.arn
+      APHRODITE_CLIO_ENABLED                 = var.clio_enabled
+      APHRODITE_ESTATEABLY_ENABLED           = var.estateably_enabled
+      APHRODITE_QUICKBOOKS_ENABLED           = var.quickbooks_enabled
+      APHRODITE_GRAPH_ENABLED                = var.graph_enabled
+      APHRODITE_SANCTION_SCREENER_ENABLED    = var.sanction_screener_enabled
     }
   }
 

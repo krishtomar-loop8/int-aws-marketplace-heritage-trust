@@ -54,28 +54,35 @@ module "cognito" {
 # (Cognito JWT authorizer) + async job store. Reads the connector secrets and
 # invokes Bedrock.
 module "search_api" {
-  source                  = "./modules/search_api"
-  aws_region              = var.aws_region
-  source_dir              = "${path.root}/build/lambda"
-  secret_arns             = values(module.secrets.secret_arns)
-  quickbooks_secret_arn   = module.secrets.secret_arns["quickbooks"]
-  clio_secret_arn         = module.secrets.secret_arns["clio"]
-  estateably_secret_arn   = module.secrets.secret_arns["estateably"]
-  graph_secret_arn        = module.secrets.secret_arns["graph"]
+  source     = "./modules/search_api"
+  aws_region = var.aws_region
+  source_dir = "${path.root}/build/lambda"
+  secret_arns = [
+    for k, v in {
+      clio       = var.clio_enabled
+      estateably = var.estateably_enabled
+      quickbooks = var.quickbooks_enabled
+      graph      = var.graph_enabled
+    } : module.secrets.secret_arns[k] if v
+  ]
+  quickbooks_secret_arn   = var.quickbooks_enabled ? module.secrets.secret_arns["quickbooks"] : ""
+  clio_secret_arn         = var.clio_enabled ? module.secrets.secret_arns["clio"] : ""
+  estateably_secret_arn   = var.estateably_enabled ? module.secrets.secret_arns["estateably"] : ""
+  graph_secret_arn        = var.graph_enabled ? module.secrets.secret_arns["graph"] : ""
   kms_key_arn             = module.kms.secrets_key_arn
   cognito_user_pool_id    = module.cognito.user_pool_id
   cognito_app_client_id   = module.cognito.user_pool_client_id
   allowed_origins         = concat(local.web_origins, ["http://localhost:5173"])
   outputs_bucket          = module.outputs_bucket.bucket
   outputs_bucket_arn      = module.outputs_bucket.bucket_arn
-  quarterly_function_name = module.quarterly_report.function_name
-  quarterly_function_arn  = module.quarterly_report.function_arn
+  quarterly_function_name = var.quarterly_enabled ? module.quarterly_report[0].function_name : ""
+  quarterly_function_arn  = var.quarterly_enabled ? module.quarterly_report[0].function_arn : ""
   # AML Export tab: on-demand "run now" (invoke) + self-serve monthly schedule.
-  aml_export_function_name = module.aml_export.function_name
-  aml_export_function_arn  = module.aml_export.function_arn
-  aml_schedule_name        = module.aml_export.schedule_name
-  aml_schedule_arn         = module.aml_export.schedule_arn
-  aml_scheduler_role_arn   = module.aml_export.scheduler_role_arn
+  aml_export_function_name = var.aml_export_enabled ? module.aml_export[0].function_name : ""
+  aml_export_function_arn  = var.aml_export_enabled ? module.aml_export[0].function_arn : ""
+  aml_schedule_name        = var.aml_export_enabled ? module.aml_export[0].schedule_name : ""
+  aml_schedule_arn         = var.aml_export_enabled ? module.aml_export[0].schedule_arn : ""
+  aml_scheduler_role_arn   = var.aml_export_enabled ? module.aml_export[0].scheduler_role_arn : ""
   # SharePoint documents are served from a Bedrock Knowledge Base (full-body index
   # built by the crawler) — app-only live search is unreliable on some legacy
   # document libraries, so we index + retrieve instead. See module.sharepoint_kb.
@@ -98,6 +105,13 @@ module "search_api" {
   # local.web_origins already encodes) + down-connector alert.
   app_base_url              = var.enable_custom_domain ? "https://${var.custom_domain}" : module.web.cloudfront_url
   integrations_alert_emails = var.integrations_alert_emails
+  # Modular architecture (Phase 2): per-connector/module enabled flags,
+  # surfaced to the Lambda as env vars for _build_deps and /capabilities.
+  clio_enabled              = var.clio_enabled
+  estateably_enabled        = var.estateably_enabled
+  quickbooks_enabled        = var.quickbooks_enabled
+  graph_enabled             = var.graph_enabled
+  sanction_screener_enabled = var.sanction_screener_enabled
 }
 
 # Phase 2+ (D3): SharePoint document Knowledge Base — a scheduled crawler copies
@@ -128,6 +142,7 @@ module "outputs_bucket" {
 # writes per-matter trust statement drafts (.docx + .pdf) to the outputs bucket
 # for human review in the portal. Reads Clio (trust ledger) only.
 module "quarterly_report" {
+  count                = var.quarterly_enabled ? 1 : 0
   source               = "./modules/quarterly_report"
   aws_region           = var.aws_region
   source_dir           = "${path.root}/build/lambda"
@@ -161,6 +176,7 @@ module "quarterly_report" {
 # active-client roster (Estateably + Clio) into the Estates/Trusts/POA workbook
 # for staff to screen in the in-app Sanction Screener. Never calls Bedrock.
 module "aml_export" {
+  count                = var.aml_export_enabled ? 1 : 0
   source               = "./modules/aml_export"
   aws_region           = var.aws_region
   source_dir           = "${path.root}/build/lambda"
@@ -191,6 +207,7 @@ module "reference_bucket" {
 }
 
 module "sanctions_refresh" {
+  count                = var.sanction_screener_enabled ? 1 : 0
   source               = "./modules/sanctions_refresh"
   aws_region           = var.aws_region
   source_dir           = "${path.root}/build/lambda"
