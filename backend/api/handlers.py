@@ -134,8 +134,12 @@ def _build_deps(*, model_id: str | None = None) -> Deps:
     quickbooks = QuickBooksConnector(secrets) if "quickbooks" in connectors_enabled else None
     # SharePoint documents come from a Bedrock Knowledge Base (full-body index
     # built by the crawler Lambda). Unset ⇒ SharePoint retrieval is skipped.
+    # `graph_enabled` is documented as "Outlook/SharePoint" (var description in
+    # terraform/variables.tf), so disabling it must stop both, not just Outlook.
     kb_id = os.environ.get("APHRODITE_SHAREPOINT_KB_ID")
-    knowledge_base = KnowledgeBaseClient(kb_id) if kb_id else None
+    knowledge_base = (
+        KnowledgeBaseClient(kb_id) if kb_id and "graph" in connectors_enabled else None
+    )
     resolver = MatterResolver(estateably=estateably, clio=clio)
     # QuickBooks joins as a reconciliation cross-check (matched by name inside the
     # dossier pull), not a resolution source.
@@ -625,7 +629,7 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
     if method == "GET" and path.endswith("/integrations"):
         if deps.integrations is None:
             return _response(503, {"error": "integration health not configured"})
-        return _response(200, deps.integrations.snapshot())
+        return _response(200, deps.integrations.snapshot(enabled=deps.connectors_enabled))
 
     if method == "GET" and path.endswith("/capabilities"):
         connectors = {
@@ -753,7 +757,7 @@ def _run_health_probe(event: dict[str, Any], context: Any = None) -> dict[str, A
     from services.secrets import SecretsClient
 
     secrets = SecretsClient(boto3.client("secretsmanager", region_name=REGION))
-    report = run_checks(secrets=secrets)
+    report = run_checks(secrets=secrets, enabled=deps.connectors_enabled)
     for name, result in report.get("sources", {}).items():
         ok = bool(result.get("ok"))
         detail = str(result.get("detail", ""))

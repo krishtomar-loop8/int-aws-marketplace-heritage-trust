@@ -41,10 +41,20 @@ def run_checks(
     probes: dict[str, Callable[[], Any]] | None = None,
     *,
     secrets: SecretsClient | None = None,
+    enabled: frozenset[str] | None = None,
 ) -> dict[str, Any]:
-    """Run each probe, capturing per-source success without raising."""
+    """Run each probe, capturing per-source success without raising.
+
+    ``enabled`` restricts the default probe set (ignored when ``probes`` is
+    given explicitly) to connectors this deployment has turned on — a disabled
+    connector's secret has its read grant withdrawn (Phase 2 modular
+    architecture), so probing it would record a false "down" rather than
+    skipping a check that was never meant to run.
+    """
     if probes is None:
         probes = _default_probes(secrets or SecretsClient())
+        if enabled is not None:
+            probes = {name: fn for name, fn in probes.items() if name in enabled}
 
     sources: dict[str, Any] = {}
     overall = True

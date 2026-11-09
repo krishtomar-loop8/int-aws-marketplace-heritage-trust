@@ -121,6 +121,20 @@ def test_build_deps_reports_disabled_when_quarterly_function_absent(
     assert deps.reports is None  # outputs_bucket alone is no longer enough
 
 
+def test_build_deps_disabling_graph_also_disables_sharepoint_retrieval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Important (I2 from the Phase 2 final review): graph_enabled is documented
+    # as "Outlook/SharePoint" — disabling it must stop SharePoint documents from
+    # still appearing in dossiers via the Bedrock Knowledge Base client.
+    monkeypatch.setenv("APHRODITE_JOBS_TABLE", "jobs")
+    monkeypatch.setenv("APHRODITE_SELF_FUNCTION", "fn")
+    monkeypatch.setenv("APHRODITE_SHAREPOINT_KB_ID", "kb-123")
+    monkeypatch.setenv("APHRODITE_GRAPH_ENABLED", "false")
+    deps = handlers._build_deps()
+    assert deps.dossier_builder._knowledge_base is None
+
+
 def test_build_deps_screener_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("APHRODITE_JOBS_TABLE", "jobs")
     monkeypatch.setenv("APHRODITE_SELF_FUNCTION", "fn")
@@ -392,13 +406,15 @@ class FakeIntegrations:
     def __init__(self, snapshot: dict | None = None) -> None:
         self._snapshot = snapshot or {"integrations": [], "log": [], "alerting": False}
         self.recorded: list[dict] = []
+        self.snapshot_enabled: frozenset[str] | None = "not called"  # type: ignore[assignment]
 
     def record_result(self, integration, *, ok, detail="", suggested_fix=""):  # type: ignore[no-untyped-def]
         self.recorded.append(
             {"integration": integration, "ok": ok, "detail": detail, "suggested_fix": suggested_fix}
         )
 
-    def snapshot(self, *, log_limit: int = 50) -> dict:
+    def snapshot(self, *, log_limit: int = 50, enabled: frozenset[str] | None = None) -> dict:
+        self.snapshot_enabled = enabled
         return self._snapshot
 
 
@@ -419,6 +435,16 @@ def test_integrations_route_returns_snapshot(monkeypatch: pytest.MonkeyPatch) ->
 def test_integrations_route_503_when_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
     install_deps(monkeypatch)  # integrations defaults to None
     assert handlers.handler(api_event("GET", "/integrations"))["statusCode"] == 503
+
+
+def test_integrations_route_filters_snapshot_by_enabled_connectors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deps, _ = install_deps(monkeypatch)
+    deps.integrations = FakeIntegrations()  # type: ignore[assignment]
+    deps.connectors_enabled = frozenset({"clio"})
+    handlers.handler(api_event("GET", "/integrations"))
+    assert deps.integrations.snapshot_enabled == frozenset({"clio"})
 
 
 def test_health_probe_records_each_source_with_suggested_fix(
@@ -450,6 +476,26 @@ def test_health_probe_records_each_source_with_suggested_fix(
     assert recorded["clio"]["ok"] is True and recorded["clio"]["suggested_fix"] == ""
     assert recorded["quickbooks"]["ok"] is False
     assert "re-authorize" in recorded["quickbooks"]["suggested_fix"].lower()
+
+
+def test_health_probe_only_checks_enabled_connectors(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Important (C3 from the Phase 2 final review): probing a disabled
+    # connector gets AccessDenied (its ReadSecrets grant is withdrawn) and
+    # would otherwise be recorded as a false "down" / trigger a false alert.
+    import backend.harness as harness_mod
+
+    deps, _ = install_deps(monkeypatch)
+    deps.integrations = FakeIntegrations()  # type: ignore[assignment]
+    deps.connectors_enabled = frozenset({"clio"})
+    captured: dict[str, Any] = {}
+
+    def fake_run_checks(**kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {"ok": True, "sources": {"clio": {"ok": True, "detail": "ok"}}}
+
+    monkeypatch.setattr(harness_mod, "run_checks", fake_run_checks)
+    handlers.handler({"health_probe": True})
+    assert captured["enabled"] == frozenset({"clio"})
 
 
 def test_aml_schedule_get_and_put(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -597,6 +643,43 @@ def test_connect_estateably_route_rejects_disabled_connector(
     resp = handlers.handler(
         admin_api_event("POST", "/connectors/estateably", body={"username": "u", "password": "p"})
     )
+    assert resp["statusCode"] == 503
+
+
+@pytest.mark.parametrize(
+    "path,body",
+    [
+        ("/connectors/graph", {"tenant_id": "t", "client_id": "c", "client_secret": "s"}),
+        ("/connectors/clio/authorize-url", {"client_id": "abc"}),
+        ("/connectors/clio/exchange", {"client_id": "c", "client_secret": "s", "code": "code123"}),
+        (
+            "/connectors/quickbooks/start",
+            {"client_id": "c", "client_secret": "s", "environment": "sandbox"},
+        ),
+    ],
+)
+def test_connector_route_rejects_disabled_connector(
+    monkeypatch: pytest.MonkeyPatch, path: str, body: dict
+) -> None:
+    # Important (I4 from the Phase 2 final review): the estateably route had a
+    # 503-when-disabled test, but the other four admin routes didn't.
+    deps, _ = install_deps(monkeypatch)
+    deps.connectors_enabled = frozenset()  # nothing enabled
+    resp = handlers.handler(admin_api_event("POST", path, body=body))
+    assert resp["statusCode"] == 503
+
+
+def test_quickbooks_callback_route_rejects_disabled_connector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Important (I4): the unauthenticated callback is the security-relevant
+    # one — a disabled connector must 503, not silently complete an OAuth
+    # exchange into a secret nothing will ever read.
+    deps, _ = install_deps(monkeypatch)
+    deps.connectors_enabled = frozenset()
+    event = api_event("GET", "/connectors/quickbooks/callback")
+    event["queryStringParameters"] = {"code": "c", "realmId": "r", "state": "s"}
+    resp = handlers.handler(event)
     assert resp["statusCode"] == 503
 
 

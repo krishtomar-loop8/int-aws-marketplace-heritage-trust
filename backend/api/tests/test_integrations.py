@@ -84,6 +84,18 @@ def test_record_success_snapshot_has_zero_failures() -> None:
     assert row["consecutive_failures"] == 0
 
 
+def test_snapshot_enabled_filter_drops_a_stale_disabled_connector_row() -> None:
+    # A connector disabled after this failure was recorded (Phase 2 modular
+    # architecture) must not keep alerting — nothing probes it any more.
+    store = _store()
+    store.record_result("estateably", ok=False, detail="boom")
+    store.record_result("estateably", ok=False, detail="boom")
+    store.record_result("clio", ok=True)
+    snap = store.snapshot(enabled=frozenset({"clio"}))
+    assert {row["integration"] for row in snap["integrations"]} == {"clio"}
+    assert snap["alerting"] is False
+
+
 def test_consecutive_failures_increment_and_reset() -> None:
     store = _store()
     store.record_result("clio", ok=True)

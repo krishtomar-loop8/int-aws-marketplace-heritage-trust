@@ -197,9 +197,18 @@ class IntegrationHealthStore:
 
     # -- read (GET /integrations) ------------------------------------------
 
-    def snapshot(self, *, log_limit: int = 50) -> dict[str, Any]:
-        """Return current per-integration status + the recent downtime log."""
+    def snapshot(
+        self, *, log_limit: int = 50, enabled: frozenset[str] | None = None
+    ) -> dict[str, Any]:
+        """Return current per-integration status + the recent downtime log.
+
+        ``enabled``, when given, drops any row for a connector this deployment
+        has since disabled — a stale "down" row written before the pause must
+        not keep alerting once nothing is probing that connector any more.
+        """
         integrations = self._all_current()
+        if enabled is not None:
+            integrations = [row for row in integrations if row["integration"] in enabled]
         log = self._recent_transitions(log_limit)
         alerting = any(
             not row["ok"] and row["consecutive_failures"] >= ALERT_THRESHOLD for row in integrations

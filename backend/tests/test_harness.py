@@ -40,3 +40,17 @@ def test_run_check_returns_single_source_result(monkeypatch):
 def test_run_check_unknown_connector_raises():
     with pytest.raises(ValueError):
         harness.run_check("not-a-connector", secrets=object())
+
+
+def test_run_checks_skips_disabled_connectors_from_the_default_set(monkeypatch):
+    # A disabled connector's secret read grant is withdrawn (Phase 2 modular
+    # architecture) — probing it anyway would record a false "down", not skip
+    # a check that was never meant to run.
+    monkeypatch.setattr(
+        harness,
+        "_default_probes",
+        lambda secrets: {"clio": lambda: None, "estateably": lambda: (_ for _ in ()).throw(RuntimeError())},
+    )
+    report = run_checks(secrets=object(), enabled=frozenset({"clio"}))
+    assert report["sources"].keys() == {"clio"}
+    assert report["ok"] is True
