@@ -153,6 +153,12 @@ class MatterResolver:
         self._estateably = estateably
         self._clio = clio
 
+    @property
+    def sources_available(self) -> bool:
+        """False when every resolution source is disabled for this deployment —
+        distinguishes "nothing to search with" from a real zero-match search."""
+        return self._estateably is not None or self._clio is not None
+
     def resolve(self, query: str, *, limit: int = 10, scope: str = "all") -> ResolutionResult:
         term, matter_type = extract_term(query)
         # Estateably and Clio searches are independent — run them concurrently, then

@@ -137,6 +137,8 @@ def run_search(
 
     Returns one of:
       - ``{"status": "not_found"}`` — no candidate matched;
+      - ``{"status": "no_sources"}`` — every resolution source (Estateably, Clio)
+        is disabled for this deployment, so no search could run at all;
       - ``{"status": "disambiguation", "candidates": [...]}`` — multiple matches;
       - ``{"status": "answer", "matter": ..., "answer": {...}}`` — Tier-0 quick answer;
       - ``{"status": "ok", "matter": ..., "answer": ..., "usage": ...}``.
@@ -154,6 +156,21 @@ def run_search(
         resolve_ms = round((time.perf_counter() - t_resolve) * 1000, 1)
 
         if not resolution.candidates:
+            # A fake/stub resolver with no `sources_available` attribute is assumed
+            # to have sources — fail open, same posture as every other Phase 2
+            # capability default (never hide/misreport on an unrelated test double).
+            if not getattr(resolver, "sources_available", True):
+                _emit_audit(actor, "search.no_sources", query_term=resolution.term)
+                if activity is not None:
+                    activity.record(
+                        actor,
+                        "matter.search",
+                        f"Searched for “{resolution.term}” — no sources are enabled "
+                        "for this deployment",
+                        target=resolution.term,
+                        detail={"outcome": "no_sources"},
+                    )
+                return {"status": "no_sources", "query": query, "term": resolution.term}
             _emit_audit(actor, "search.not_found", query_term=resolution.term)
             if activity is not None:
                 activity.record(

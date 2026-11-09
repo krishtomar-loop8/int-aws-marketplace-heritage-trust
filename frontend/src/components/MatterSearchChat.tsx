@@ -343,6 +343,14 @@ function AssistantTurn({
       </p>
     );
   }
+  if (result.status === "no_sources") {
+    return (
+      <p className="banner banner-warn">
+        No sources are enabled for this deployment, so Matter Search has nothing to query. Ask an
+        admin to enable a connector on the Integrations tab.
+      </p>
+    );
+  }
   if (result.status === "disambiguation") {
     return <Disambiguation candidates={result.candidates ?? []} onPick={onPick} />;
   }

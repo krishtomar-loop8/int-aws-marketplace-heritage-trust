@@ -65,7 +65,7 @@ export interface QuickAnswer {
 }
 
 export interface SearchResult {
-  status: "ok" | "disambiguation" | "not_found" | "answer";
+  status: "ok" | "disambiguation" | "not_found" | "no_sources" | "answer";
   query?: string;
   term?: string;
   matter?: { name: string; type: string | null; refs: Ref[] };
