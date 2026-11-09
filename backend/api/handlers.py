@@ -178,7 +178,8 @@ def _build_deps(*, model_id: str | None = None) -> Deps:
     # bucket — gates these services off.
     quarterly_fn = os.environ.get("APHRODITE_QUARTERLY_FUNCTION")
     aml_export_fn = os.environ.get("APHRODITE_AML_EXPORT_FUNCTION")
-    screener_enabled = os.environ.get("APHRODITE_SANCTION_SCREENER_ENABLED", "false").lower() != "false"
+    screener_env = os.environ.get("APHRODITE_SANCTION_SCREENER_ENABLED", "false")
+    screener_enabled = screener_env.lower() != "false"
     reports = ReportsService(s3, outputs_bucket) if s3 and quarterly_fn else None
     # AML export drafts (D6) live in the same outputs bucket, under aml/ instead
     # of quarterly/ — no separate bucket or client needed.
