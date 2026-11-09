@@ -4,6 +4,10 @@ locals {
   function_name = "aphrodite-search"
   # Self-invoke ARN built from the (known) name to avoid a role→function→role cycle.
   function_arn = "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${local.function_name}"
+  # Modular architecture (Phase 2): an empty-string ARN means "disabled" — IAM
+  # rejects a statement with an empty/missing Resource, so every statement built
+  # from one of these must itself become conditional, not just filter the value.
+  readable_secret_arns = [for arn in var.secret_arns : arn if arn != ""]
 }
 
 # -- job store --------------------------------------------------------------
@@ -147,10 +151,15 @@ data "aws_iam_policy_document" "search" {
     actions   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
     resources = ["arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:*"]
   }
-  statement {
-    sid       = "ReadSecrets"
-    actions   = ["secretsmanager:GetSecretValue"]
-    resources = [for arn in var.secret_arns : arn if arn != ""]
+  # Granted only when at least one connector is enabled — an IAM statement with
+  # an empty Resource list is rejected at apply time, not caught by `validate`.
+  dynamic "statement" {
+    for_each = length(local.readable_secret_arns) > 0 ? [1] : []
+    content {
+      sid       = "ReadSecrets"
+      actions   = ["secretsmanager:GetSecretValue"]
+      resources = local.readable_secret_arns
+    }
   }
   # QuickBooks rotates its OAuth refresh token on every refresh and invalidates
   # the prior one; the connector persists the rotated value so it survives cold
@@ -311,32 +320,45 @@ data "aws_iam_policy_document" "search" {
   }
   # On-demand quarterly generation: the portal triggers the quarterly-report
   # Lambda (which does the Clio reads + S3 write) via POST /reports/generate.
-  statement {
-    sid       = "InvokeQuarterly"
-    actions   = ["lambda:InvokeFunction"]
-    resources = [var.quarterly_function_arn]
+  # Granted only when the module is deployed (its function ARN is "" otherwise).
+  dynamic "statement" {
+    for_each = var.quarterly_function_arn != "" ? [1] : []
+    content {
+      sid       = "InvokeQuarterly"
+      actions   = ["lambda:InvokeFunction"]
+      resources = [var.quarterly_function_arn]
+    }
   }
   # On-demand AML export "run now": the portal invokes the AML export Lambda.
-  statement {
-    sid       = "InvokeAmlExport"
-    actions   = ["lambda:InvokeFunction"]
-    resources = [var.aml_export_function_arn]
+  dynamic "statement" {
+    for_each = var.aml_export_function_arn != "" ? [1] : []
+    content {
+      sid       = "InvokeAmlExport"
+      actions   = ["lambda:InvokeFunction"]
+      resources = [var.aml_export_function_arn]
+    }
   }
   # Self-serve AML schedule: read + update the EventBridge schedule, and pass the
   # scheduler's role on update (scoped to that one role + the scheduler service).
-  statement {
-    sid       = "ManageAmlSchedule"
-    actions   = ["scheduler:GetSchedule", "scheduler:UpdateSchedule"]
-    resources = [var.aml_schedule_arn]
+  dynamic "statement" {
+    for_each = var.aml_schedule_arn != "" ? [1] : []
+    content {
+      sid       = "ManageAmlSchedule"
+      actions   = ["scheduler:GetSchedule", "scheduler:UpdateSchedule"]
+      resources = [var.aml_schedule_arn]
+    }
   }
-  statement {
-    sid       = "PassSchedulerRole"
-    actions   = ["iam:PassRole"]
-    resources = [var.aml_scheduler_role_arn]
-    condition {
-      test     = "StringEquals"
-      variable = "iam:PassedToService"
-      values   = ["scheduler.amazonaws.com"]
+  dynamic "statement" {
+    for_each = var.aml_scheduler_role_arn != "" ? [1] : []
+    content {
+      sid       = "PassSchedulerRole"
+      actions   = ["iam:PassRole"]
+      resources = [var.aml_scheduler_role_arn]
+      condition {
+        test     = "StringEquals"
+        variable = "iam:PassedToService"
+        values   = ["scheduler.amazonaws.com"]
+      }
     }
   }
 }

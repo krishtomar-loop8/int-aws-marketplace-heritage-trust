@@ -216,3 +216,23 @@ module "sanctions_refresh" {
   kms_key_arn          = module.kms.secrets_key_arn
   schedule_enabled     = var.sanctions_refresh_schedule_enabled
 }
+
+# Phase 2 added `count` to these three modules (previously unconditional). For
+# any deployment whose state predates Phase 2, this re-addresses the existing
+# resources in place instead of destroying and recreating them — recreation
+# would delete their CloudWatch log groups (losing audit history) and reset
+# the AML schedule's ignore_changes-protected state. A deployment with no
+# prior state (nothing at these addresses) is unaffected — `moved` is a no-op
+# when there's nothing to move.
+moved {
+  from = module.quarterly_report
+  to   = module.quarterly_report[0]
+}
+moved {
+  from = module.aml_export
+  to   = module.aml_export[0]
+}
+moved {
+  from = module.sanctions_refresh
+  to   = module.sanctions_refresh[0]
+}
