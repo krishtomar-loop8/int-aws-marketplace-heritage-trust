@@ -167,7 +167,10 @@ def test_suggest_fix_default() -> None:
 def test_alert_fires_at_threshold_not_before() -> None:
     calls: list[tuple[str, str]] = []
     store = IntegrationHealthStore(
-        table="t", client=FakeDdb(), clock=Clock(), on_alert=lambda name, detail: calls.append((name, detail))
+        table="t",
+        client=FakeDdb(),
+        clock=Clock(),
+        on_alert=lambda name, detail: calls.append((name, detail)),
     )
     store.record_result("clio", ok=False, detail="boom")  # 1st failure
     assert calls == []
@@ -178,7 +181,10 @@ def test_alert_fires_at_threshold_not_before() -> None:
 def test_alert_not_resent_on_subsequent_failures() -> None:
     calls: list[tuple[str, str]] = []
     store = IntegrationHealthStore(
-        table="t", client=FakeDdb(), clock=Clock(), on_alert=lambda name, detail: calls.append((name, detail))
+        table="t",
+        client=FakeDdb(),
+        clock=Clock(),
+        on_alert=lambda name, detail: calls.append((name, detail)),
     )
     for _ in range(4):
         store.record_result("clio", ok=False, detail="boom")
@@ -188,7 +194,10 @@ def test_alert_not_resent_on_subsequent_failures() -> None:
 def test_alert_not_fired_on_recovery() -> None:
     calls: list[tuple[str, str]] = []
     store = IntegrationHealthStore(
-        table="t", client=FakeDdb(), clock=Clock(), on_alert=lambda name, detail: calls.append((name, detail))
+        table="t",
+        client=FakeDdb(),
+        clock=Clock(),
+        on_alert=lambda name, detail: calls.append((name, detail)),
     )
     store.record_result("clio", ok=False, detail="boom")
     store.record_result("clio", ok=False, detail="boom")
@@ -207,7 +216,10 @@ def test_repeated_healthy_results_never_fire_alert() -> None:
     # connector (repeated ok=True) must not crash or spuriously alert.
     calls: list[tuple[str, str]] = []
     store = IntegrationHealthStore(
-        table="t", client=FakeDdb(), clock=Clock(), on_alert=lambda name, detail: calls.append((name, detail))
+        table="t",
+        client=FakeDdb(),
+        clock=Clock(),
+        on_alert=lambda name, detail: calls.append((name, detail)),
     )
     store.record_result("clio", ok=True)
     store.record_result("clio", ok=True)

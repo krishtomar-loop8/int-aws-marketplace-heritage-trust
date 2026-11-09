@@ -222,7 +222,8 @@ def _build_deps(*, model_id: str | None = None) -> Deps:
                 )
             except Exception:  # noqa: BLE001 - an alert failure must not break the probe
                 logger.warning(
-                    "integration alert publish failed", extra={"extra_fields": {"integration": name}}
+                    "integration alert publish failed",
+                    extra={"extra_fields": {"integration": name}},
                 )
 
     integrations = (
@@ -668,7 +669,9 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
             )
         except connectors_admin.ConnectorValidationError as exc:
             return _response(400, {"error": str(exc)})
-        _record(deps, event, "connector.connect", "Started a QuickBooks connection", target="quickbooks")
+        _record(
+            deps, event, "connector.connect", "Started a QuickBooks connection", target="quickbooks"
+        )
         return _response(200, result)
 
     # Hit directly by Intuit's browser redirect — no Authorization header,

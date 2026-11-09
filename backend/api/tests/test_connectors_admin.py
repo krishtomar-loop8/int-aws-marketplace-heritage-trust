@@ -48,7 +48,9 @@ def test_connect_estateably_stores_and_validates_on_success(monkeypatch):
         json={"data": {"attributes": {"token": "t"}}},
         status=200,
     )
-    monkeypatch.setattr(connectors_admin, "run_check", lambda name, secrets: {"ok": True, "detail": "ok"})
+    monkeypatch.setattr(
+        connectors_admin, "run_check", lambda name, secrets: {"ok": True, "detail": "ok"}
+    )
     secrets = _FakeSecrets()
     result = connectors_admin.connect_estateably(secrets, {"username": "u", "password": "p"})
     assert result == {"ok": True, "detail": "ok"}
@@ -65,7 +67,9 @@ def test_connect_estateably_records_health_result(monkeypatch):
         json={"data": {"attributes": {"token": "t"}}},
         status=200,
     )
-    monkeypatch.setattr(connectors_admin, "run_check", lambda name, secrets: {"ok": True, "detail": "ok"})
+    monkeypatch.setattr(
+        connectors_admin, "run_check", lambda name, secrets: {"ok": True, "detail": "ok"}
+    )
     secrets = _FakeSecrets()
     integrations = _FakeIntegrations()
     connectors_admin.connect_estateably(
@@ -113,7 +117,9 @@ def test_connect_estateably_reconnect_with_same_credentials_succeeds_again(monke
         json={"data": {"attributes": {"token": "t2"}}},
         status=200,
     )
-    monkeypatch.setattr(connectors_admin, "run_check", lambda name, secrets: {"ok": True, "detail": "ok"})
+    monkeypatch.setattr(
+        connectors_admin, "run_check", lambda name, secrets: {"ok": True, "detail": "ok"}
+    )
     secrets = _FakeSecrets()
     body = {"username": "u", "password": "p"}
     first = connectors_admin.connect_estateably(secrets, body)
@@ -128,8 +134,15 @@ _GRAPH_TOKEN_URL = "https://login.microsoftonline.com/t/oauth2/v2.0/token"
 
 @responses.activate
 def test_connect_graph_stores_and_validates_on_success(monkeypatch):
-    responses.add(responses.POST, _GRAPH_TOKEN_URL, json={"access_token": "at", "expires_in": 3600}, status=200)
-    monkeypatch.setattr(connectors_admin, "run_check", lambda name, secrets: {"ok": True, "detail": "ok"})
+    responses.add(
+        responses.POST,
+        _GRAPH_TOKEN_URL,
+        json={"access_token": "at", "expires_in": 3600},
+        status=200,
+    )
+    monkeypatch.setattr(
+        connectors_admin, "run_check", lambda name, secrets: {"ok": True, "detail": "ok"}
+    )
     secrets = _FakeSecrets()
     body = {"tenant_id": "t", "client_id": "c", "client_secret": "s"}
     result = connectors_admin.connect_graph(secrets, body)
@@ -139,13 +152,19 @@ def test_connect_graph_stores_and_validates_on_success(monkeypatch):
 
 @responses.activate
 def test_connect_graph_records_health_result(monkeypatch):
-    responses.add(responses.POST, _GRAPH_TOKEN_URL, json={"access_token": "at", "expires_in": 3600}, status=200)
-    monkeypatch.setattr(connectors_admin, "run_check", lambda name, secrets: {"ok": True, "detail": "ok"})
+    responses.add(
+        responses.POST,
+        _GRAPH_TOKEN_URL,
+        json={"access_token": "at", "expires_in": 3600},
+        status=200,
+    )
+    monkeypatch.setattr(
+        connectors_admin, "run_check", lambda name, secrets: {"ok": True, "detail": "ok"}
+    )
     secrets = _FakeSecrets()
     integrations = _FakeIntegrations()
-    connectors_admin.connect_graph(
-        secrets, {"tenant_id": "t", "client_id": "c", "client_secret": "s"}, integrations=integrations
-    )
+    body = {"tenant_id": "t", "client_id": "c", "client_secret": "s"}
+    connectors_admin.connect_graph(secrets, body, integrations=integrations)
     assert integrations.calls == [
         {"integration": "graph", "ok": True, "detail": "ok", "suggested_fix": ""}
     ]
@@ -156,14 +175,16 @@ def test_connect_graph_bad_credentials_stores_nothing():
     responses.add(responses.POST, _GRAPH_TOKEN_URL, json={"error": "invalid_client"}, status=401)
     secrets = _FakeSecrets()
     with pytest.raises(connectors_admin.ConnectorValidationError):
-        connectors_admin.connect_graph(secrets, {"tenant_id": "t", "client_id": "c", "client_secret": "wrong"})
+        body = {"tenant_id": "t", "client_id": "c", "client_secret": "wrong"}
+        connectors_admin.connect_graph(secrets, body)
     assert secrets.stored == {}
 
 
 def test_connect_graph_missing_fields_rejected():
     secrets = _FakeSecrets()
     with pytest.raises(connectors_admin.ConnectorValidationError):
-        connectors_admin.connect_graph(secrets, {"tenant_id": "", "client_id": "", "client_secret": ""})
+        body = {"tenant_id": "", "client_id": "", "client_secret": ""}
+        connectors_admin.connect_graph(secrets, body)
     assert secrets.stored == {}
 
 
@@ -189,9 +210,12 @@ def test_clio_exchange_stores_and_validates_on_success(monkeypatch):
         json={"refresh_token": "rt", "access_token": "at"},
         status=200,
     )
-    monkeypatch.setattr(connectors_admin, "run_check", lambda name, secrets: {"ok": True, "detail": "ok"})
+    monkeypatch.setattr(
+        connectors_admin, "run_check", lambda name, secrets: {"ok": True, "detail": "ok"}
+    )
     secrets = _FakeSecrets()
-    result = connectors_admin.clio_exchange(secrets, {"client_id": "c", "client_secret": "s", "code": "code123"})
+    body = {"client_id": "c", "client_secret": "s", "code": "code123"}
+    result = connectors_admin.clio_exchange(secrets, body)
     assert secrets.stored["aphrodite/clio"]["refresh_token"] == "rt"
     assert result == {"ok": True, "detail": "ok"}
 
@@ -204,12 +228,13 @@ def test_clio_exchange_records_health_result(monkeypatch):
         json={"refresh_token": "rt", "access_token": "at"},
         status=200,
     )
-    monkeypatch.setattr(connectors_admin, "run_check", lambda name, secrets: {"ok": True, "detail": "ok"})
+    monkeypatch.setattr(
+        connectors_admin, "run_check", lambda name, secrets: {"ok": True, "detail": "ok"}
+    )
     secrets = _FakeSecrets()
     integrations = _FakeIntegrations()
-    connectors_admin.clio_exchange(
-        secrets, {"client_id": "c", "client_secret": "s", "code": "code123"}, integrations=integrations
-    )
+    body = {"client_id": "c", "client_secret": "s", "code": "code123"}
+    connectors_admin.clio_exchange(secrets, body, integrations=integrations)
     assert integrations.calls == [
         {"integration": "clio", "ok": True, "detail": "ok", "suggested_fix": ""}
     ]
@@ -220,7 +245,8 @@ def test_clio_exchange_failure_stores_nothing():
     responses.add(responses.POST, "https://app.clio.com/oauth/token", json={}, status=400)
     secrets = _FakeSecrets()
     with pytest.raises(connectors_admin.ConnectorValidationError):
-        connectors_admin.clio_exchange(secrets, {"client_id": "c", "client_secret": "s", "code": "bad"})
+        body = {"client_id": "c", "client_secret": "s", "code": "bad"}
+        connectors_admin.clio_exchange(secrets, body)
     assert secrets.stored == {}
 
 
@@ -277,7 +303,9 @@ def test_quickbooks_start_rejects_bad_environment():
 def test_quickbooks_callback_matching_state_completes_exchange(monkeypatch):
     secrets = _FakeSecrets()
     secrets.stored["aphrodite/quickbooks"] = {
-        "_pending": {"client_id": "c", "client_secret": "s", "environment": "sandbox", "state": "abc"},
+        "_pending": {
+            "client_id": "c", "client_secret": "s", "environment": "sandbox", "state": "abc"
+        },
     }
     responses.add(
         responses.POST,
@@ -285,7 +313,9 @@ def test_quickbooks_callback_matching_state_completes_exchange(monkeypatch):
         json={"refresh_token": "rt", "access_token": "at"},
         status=200,
     )
-    monkeypatch.setattr(connectors_admin, "run_check", lambda name, secrets: {"ok": True, "detail": "ok"})
+    monkeypatch.setattr(
+        connectors_admin, "run_check", lambda name, secrets: {"ok": True, "detail": "ok"}
+    )
     url = connectors_admin.quickbooks_callback(
         secrets, {"code": "code1", "realmId": "r1", "state": "abc"},
         redirect_uri="https://api.example/connectors/quickbooks/callback",
@@ -293,7 +323,8 @@ def test_quickbooks_callback_matching_state_completes_exchange(monkeypatch):
     )
     assert url == "https://app.example/?setup=quickbooks-connected"
     stored = secrets.stored["aphrodite/quickbooks"]
-    assert stored["refresh_token"] == "rt" and stored["realm_id"] == "r1" and "_pending" not in stored
+    assert stored["refresh_token"] == "rt" and stored["realm_id"] == "r1"
+    assert "_pending" not in stored
     assert stored["client_id"] == "c" and stored["client_secret"] == "s"
 
 
@@ -301,7 +332,9 @@ def test_quickbooks_callback_matching_state_completes_exchange(monkeypatch):
 def test_quickbooks_callback_records_health_result(monkeypatch):
     secrets = _FakeSecrets()
     secrets.stored["aphrodite/quickbooks"] = {
-        "_pending": {"client_id": "c", "client_secret": "s", "environment": "sandbox", "state": "abc"},
+        "_pending": {
+            "client_id": "c", "client_secret": "s", "environment": "sandbox", "state": "abc"
+        },
     }
     responses.add(
         responses.POST,
@@ -309,7 +342,9 @@ def test_quickbooks_callback_records_health_result(monkeypatch):
         json={"refresh_token": "rt", "access_token": "at"},
         status=200,
     )
-    monkeypatch.setattr(connectors_admin, "run_check", lambda name, secrets: {"ok": True, "detail": "ok"})
+    monkeypatch.setattr(
+        connectors_admin, "run_check", lambda name, secrets: {"ok": True, "detail": "ok"}
+    )
     integrations = _FakeIntegrations()
     connectors_admin.quickbooks_callback(
         secrets, {"code": "code1", "realmId": "r1", "state": "abc"},
@@ -326,7 +361,9 @@ def test_quickbooks_callback_mismatched_state_does_not_complete():
     secrets = _FakeSecrets()
     secrets.stored["aphrodite/quickbooks"] = {
         "client_id": "old-c", "refresh_token": "old-rt", "realm_id": "old-realm",
-        "_pending": {"client_id": "c", "client_secret": "s", "environment": "sandbox", "state": "abc"},
+        "_pending": {
+            "client_id": "c", "client_secret": "s", "environment": "sandbox", "state": "abc"
+        },
     }
     url = connectors_admin.quickbooks_callback(
         secrets, {"code": "code1", "realmId": "r1", "state": "WRONG"},
@@ -345,7 +382,9 @@ def test_quickbooks_callback_failure_leaves_existing_credential_untouched():
     secrets.stored["aphrodite/quickbooks"] = {
         "client_id": "old-c", "client_secret": "old-s", "environment": "sandbox",
         "refresh_token": "old-rt", "realm_id": "old-realm",
-        "_pending": {"client_id": "new-c", "client_secret": "new-s", "environment": "sandbox", "state": "abc"},
+        "_pending": {
+            "client_id": "new-c", "client_secret": "new-s", "environment": "sandbox", "state": "abc"
+        },
     }
     url = connectors_admin.quickbooks_callback(
         secrets, {"code": "", "realmId": "r1", "state": "abc"},  # missing code
@@ -362,7 +401,9 @@ def test_quickbooks_callback_missing_realm_id_rejected(monkeypatch):
     secrets = _FakeSecrets()
     secrets.stored["aphrodite/quickbooks"] = {
         "refresh_token": "old-rt", "realm_id": "old-realm",
-        "_pending": {"client_id": "c", "client_secret": "s", "environment": "sandbox", "state": "abc"},
+        "_pending": {
+            "client_id": "c", "client_secret": "s", "environment": "sandbox", "state": "abc"
+        },
     }
     responses.add(
         responses.POST,
@@ -370,7 +411,9 @@ def test_quickbooks_callback_missing_realm_id_rejected(monkeypatch):
         json={"refresh_token": "rt", "access_token": "at"},
         status=200,
     )
-    monkeypatch.setattr(connectors_admin, "run_check", lambda name, secrets: {"ok": True, "detail": "ok"})
+    monkeypatch.setattr(
+        connectors_admin, "run_check", lambda name, secrets: {"ok": True, "detail": "ok"}
+    )
     url = connectors_admin.quickbooks_callback(
         secrets, {"code": "code1", "state": "abc"},  # no realmId
         redirect_uri="https://api.example/connectors/quickbooks/callback",

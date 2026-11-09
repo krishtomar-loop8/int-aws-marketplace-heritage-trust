@@ -31,7 +31,7 @@ class ConnectorValidationError(Exception):
 
 
 def _record_health(
-    integrations: "IntegrationHealthStore | None", name: str, result: dict[str, Any]
+    integrations: IntegrationHealthStore | None, name: str, result: dict[str, Any]
 ) -> None:
     """Write a just-completed connect/reconnect's result into the health
     store immediately, so the Setup screen's status updates without waiting
@@ -47,7 +47,10 @@ def _record_health(
         fix = "" if ok else suggest_fix(name, detail)
         integrations.record_result(name, ok=ok, detail=detail, suggested_fix=fix)
     except Exception:  # noqa: BLE001 - see docstring
-        logger.warning("health-store write after connect failed", extra={"extra_fields": {"integration": name}})
+        logger.warning(
+            "health-store write after connect failed",
+            extra={"extra_fields": {"integration": name}},
+        )
 
 
 class _StaticSecrets:
@@ -68,7 +71,7 @@ def connect_estateably(
     secrets: SecretsClient,
     payload: dict[str, Any],
     *,
-    integrations: "IntegrationHealthStore | None" = None,
+    integrations: IntegrationHealthStore | None = None,
 ) -> dict[str, Any]:
     """Validate and store Estateably service-account credentials.
 
@@ -103,7 +106,7 @@ def connect_graph(
     secrets: SecretsClient,
     payload: dict[str, Any],
     *,
-    integrations: "IntegrationHealthStore | None" = None,
+    integrations: IntegrationHealthStore | None = None,
 ) -> dict[str, Any]:
     """Validate and store Microsoft Graph app-only credentials.
 
@@ -156,7 +159,7 @@ def clio_exchange(
     secrets: SecretsClient,
     payload: dict[str, Any],
     *,
-    integrations: "IntegrationHealthStore | None" = None,
+    integrations: IntegrationHealthStore | None = None,
 ) -> dict[str, Any]:
     """Exchange a pasted Clio authorization code and store the refresh token.
 
@@ -259,7 +262,7 @@ def quickbooks_callback(
     *,
     redirect_uri: str,
     app_base_url: str,
-    integrations: "IntegrationHealthStore | None" = None,
+    integrations: IntegrationHealthStore | None = None,
 ) -> str:
     """Complete the QuickBooks OAuth redirect; always returns a redirect URL.
 
