@@ -212,6 +212,28 @@ def test_401_triggers_token_refresh_and_retry() -> None:
 
 
 @responses.activate
+def test_fetch_token_itself_retries_with_fresh_secret_on_stale_cached_credentials() -> None:
+    # A container that has never fetched a token yet (self._token is None —
+    # e.g. a cold start right after an admin reconnect) goes straight to
+    # _fetch_token() with no refresh. _paginate (unlike _get_json) calls
+    # self._headers() OUTSIDE its try/except, so it has no accidental safety
+    # net — the self-healing retry must live inside _fetch_token itself, not
+    # rely on a caller's retry structure.
+    secrets = FakeSecretsClient({"tenant_id": TENANT_ID, "client_id": "old-id", "client_secret": "old-secret"})
+    connector = GraphConnector(secrets)
+
+    responses.add(responses.POST, TOKEN_URL, json={"error": "invalid_client"}, status=401)  # stale creds rejected
+    secrets._secret = {"tenant_id": TENANT_ID, "client_id": "new-id", "client_secret": "new-secret"}
+    _add_token(token="tok-2")  # only matches once the retry reads the NEW secret
+    responses.add(responses.GET, f"{BASE}/users", json={"value": [{"id": "u1"}]}, status=200)
+
+    users = connector.list_users()
+
+    assert users == [{"id": "u1"}]
+    assert secrets.get_calls[-1] == ("aphrodite/graph", True)
+
+
+@responses.activate
 def test_401_after_reconnect_uses_fresh_secret_not_cache() -> None:
     # Simulates: container warm with old creds, admin reconnects (secret
     # changes in Secrets Manager), next call 401s on the stale cached token,

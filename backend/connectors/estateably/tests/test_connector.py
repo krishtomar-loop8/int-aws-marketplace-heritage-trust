@@ -414,6 +414,34 @@ def test_expired_token_triggers_reauth_and_retry():
 
 
 @responses.activate
+def test_login_itself_retries_with_fresh_secret_on_stale_cached_credentials():
+    # A container that has NEVER successfully logged in yet (self._token is
+    # None — e.g. a cold start right after an admin reconnect) goes straight
+    # to _login() with no refresh, not through _get_response's 401 retry.
+    # If the cached secret is stale, _login must self-heal rather than fail
+    # outright, since the retry logic added for the reconnect scenario only
+    # lived in _get_response's handler, not in _login itself.
+    secrets = FakeSecrets({"username": "old", "password": "old-pw", "base_url": BASE_URL})
+    http = HttpClient(sleep=lambda _s: None)
+    connector = EstateablyConnector(secrets, http=http)
+
+    add_login(status=401)  # stale cached creds rejected
+    secrets._secret = {"username": "new", "password": "new-pw", "base_url": BASE_URL}  # admin reconnected
+    add_login(token=TOKEN_2)  # only matches once the retry reads the NEW secret
+    responses.add(
+        responses.GET,
+        f"{BASE_URL}/api/v1/estates/E1",
+        json={"data": {"id": "E1", "attributes": {"title": "Recovered"}}},
+        status=200,
+    )
+
+    estate = connector.get_estate("E1")
+
+    assert estate["attributes"]["title"] == "Recovered"
+    assert secrets.get_calls[-1] == ("aphrodite/estateably", True)
+
+
+@responses.activate
 def test_401_after_reconnect_uses_fresh_secret_not_cache():
     # Simulates: container warm with old creds, admin reconnects (secret
     # changes in Secrets Manager), next call 401s on the stale cached creds,

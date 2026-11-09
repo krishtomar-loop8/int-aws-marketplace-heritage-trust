@@ -70,6 +70,15 @@ class GraphConnector:
         # OAuth token endpoint is the only POST; it returns a bearer token.
         response = self._http.session.post(token_url, data=data, timeout=self._http.timeout)
         if response.status_code >= 400:
+            if not refresh_secret:
+                # The cached secret may be stale (e.g. an admin reconnected
+                # with new credentials after this container went warm) —
+                # retry once against a fresh Secrets Manager read before
+                # concluding the credentials are genuinely invalid. Done here
+                # (not left to callers) so every call site self-heals, not
+                # just ones whose try/except happens to catch this.
+                logger.info("Graph token request failed; retrying with a fresh secret read")
+                return self._fetch_token(refresh_secret=True)
             raise HttpError(f"Graph token request failed: {response.status_code}")
         payload = response.json()
         self._token = payload["access_token"]

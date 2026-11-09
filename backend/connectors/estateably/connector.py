@@ -126,6 +126,13 @@ class EstateablyConnector:
             timeout=self._http.timeout,
         )
         if response.status_code >= 400:
+            if not refresh_secret:
+                # The cached secret may be stale (e.g. an admin reconnected
+                # with new credentials after this container went warm) —
+                # retry once against a fresh Secrets Manager read before
+                # concluding the credentials are genuinely invalid.
+                logger.info("Estateably login failed; retrying with a fresh secret read")
+                return self._login(refresh_secret=True)
             logger.error(
                 "Estateably login failed",
                 extra={"extra_fields": {"status": response.status_code}},
