@@ -941,7 +941,9 @@ class DossierBuilder:
                 ("estateably", self._estateably),
                 ("clio", self._clio),
                 ("quickbooks", self._quickbooks),
-                ("graph", self._graph),
+                # "outlook", not "graph" — matches the vocabulary the synthesis
+                # prompt and dossier.errors already use for this source.
+                ("outlook", self._graph),
             )
             if connector is None
         )

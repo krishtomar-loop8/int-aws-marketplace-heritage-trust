@@ -377,7 +377,9 @@ def test_build_marks_disabled_connectors_distinct_from_candidate_gaps() -> None:
         score=1.0,
     )
     dossier = builder.build(candidate)
-    assert dossier.disabled_sources == frozenset({"estateably", "quickbooks", "graph"})
+    # "outlook", not "graph" — matches the vocabulary the synthesis prompt and
+    # dossier.errors already use for this source (Important/I3, final review).
+    assert dossier.disabled_sources == frozenset({"estateably", "quickbooks", "outlook"})
     assert "clio" not in dossier.disabled_sources
 
 
@@ -393,7 +395,7 @@ def test_build_with_all_connectors_disabled_does_not_crash() -> None:
         score=1.0,
     )
     dossier = builder.build(candidate)
-    assert dossier.disabled_sources == frozenset({"estateably", "clio", "quickbooks", "graph"})
+    assert dossier.disabled_sources == frozenset({"estateably", "clio", "quickbooks", "outlook"})
     assert dossier.errors == []  # nothing was attempted, so nothing failed
     assert dossier.as_dict()["disabled_sources"]
 
