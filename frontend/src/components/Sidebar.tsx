@@ -1,10 +1,11 @@
 import { Fragment, useEffect } from "react";
 import { useIntegrationsHealth } from "../lib/integrationsHealth";
 import { useSearchJobs } from "../lib/searchJobs";
-import { TABS, type TabId } from "../nav";
+import { TABS, type ModuleTab, type TabId } from "../nav";
 import { RecentSearches } from "./RecentSearches";
 
 export function Sidebar({
+  tabs = TABS,
   activeTab,
   onSelect,
   collapsed,
@@ -13,6 +14,7 @@ export function Sidebar({
   user,
   onSignOut,
 }: {
+  tabs?: ModuleTab[];
   activeTab: TabId;
   onSelect: (id: TabId) => void;
   collapsed: boolean;
@@ -56,7 +58,7 @@ export function Sidebar({
       </div>
 
       <nav className="nav">
-        {TABS.map((tab) => {
+        {tabs.map((tab) => {
           const active = tab.id === activeTab;
           // The recent-searches (conversation) list nests under Matter Search,
           // only while it's the open tab and the rail isn't collapsed.
