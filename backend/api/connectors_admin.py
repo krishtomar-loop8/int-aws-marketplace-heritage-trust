@@ -12,16 +12,42 @@ validate-then-store logic, unit-testable without an API Gateway event.
 from __future__ import annotations
 
 import secrets as _pysecrets
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from backend.harness import run_check
+from services.logging import get_logger
 from services.secrets import SecretsClient
+
+if TYPE_CHECKING:
+    from backend.api.integrations import IntegrationHealthStore
+
+logger = get_logger(__name__)
 
 _QUICKBOOKS_ENVIRONMENTS = ("sandbox", "production")
 
 
 class ConnectorValidationError(Exception):
     """A submitted credential failed live validation; nothing was stored."""
+
+
+def _record_health(
+    integrations: "IntegrationHealthStore | None", name: str, result: dict[str, Any]
+) -> None:
+    """Write a just-completed connect/reconnect's result into the health
+    store immediately, so the Setup screen's status updates without waiting
+    up to an hour for the next scheduled probe. Never raises — a health-store
+    write must not turn a real success into an error response."""
+    if integrations is None:
+        return
+    try:
+        from backend.api.integrations import suggest_fix
+
+        ok = bool(result.get("ok"))
+        detail = str(result.get("detail", ""))
+        fix = "" if ok else suggest_fix(name, detail)
+        integrations.record_result(name, ok=ok, detail=detail, suggested_fix=fix)
+    except Exception:  # noqa: BLE001 - see docstring
+        logger.warning("health-store write after connect failed", extra={"extra_fields": {"integration": name}})
 
 
 class _StaticSecrets:
@@ -38,7 +64,12 @@ class _StaticSecrets:
         return self._value
 
 
-def connect_estateably(secrets: SecretsClient, payload: dict[str, Any]) -> dict[str, Any]:
+def connect_estateably(
+    secrets: SecretsClient,
+    payload: dict[str, Any],
+    *,
+    integrations: "IntegrationHealthStore | None" = None,
+) -> dict[str, Any]:
     """Validate and store Estateably service-account credentials.
 
     Returns ``run_check("estateably", secrets)``'s result on success; raises
@@ -63,10 +94,17 @@ def connect_estateably(secrets: SecretsClient, payload: dict[str, Any]) -> dict[
         raise ConnectorValidationError(f"Estateably login failed: {exc}") from exc
 
     secrets.put("aphrodite/estateably", candidate)
-    return run_check("estateably", secrets)
+    result = run_check("estateably", secrets)
+    _record_health(integrations, "estateably", result)
+    return result
 
 
-def connect_graph(secrets: SecretsClient, payload: dict[str, Any]) -> dict[str, Any]:
+def connect_graph(
+    secrets: SecretsClient,
+    payload: dict[str, Any],
+    *,
+    integrations: "IntegrationHealthStore | None" = None,
+) -> dict[str, Any]:
     """Validate and store Microsoft Graph app-only credentials.
 
     Returns ``run_check("graph", secrets)``'s result on success; raises
@@ -89,7 +127,9 @@ def connect_graph(secrets: SecretsClient, payload: dict[str, Any]) -> dict[str, 
         raise ConnectorValidationError(f"Graph token request failed: {exc}") from exc
 
     secrets.put("aphrodite/graph", candidate)
-    return run_check("graph", secrets)
+    result = run_check("graph", secrets)
+    _record_health(integrations, "graph", result)
+    return result
 
 
 def clio_authorize_url(payload: dict[str, Any]) -> dict[str, Any]:
@@ -112,7 +152,12 @@ def clio_authorize_url(payload: dict[str, Any]) -> dict[str, Any]:
     return {"url": url, "state": state}
 
 
-def clio_exchange(secrets: SecretsClient, payload: dict[str, Any]) -> dict[str, Any]:
+def clio_exchange(
+    secrets: SecretsClient,
+    payload: dict[str, Any],
+    *,
+    integrations: "IntegrationHealthStore | None" = None,
+) -> dict[str, Any]:
     """Exchange a pasted Clio authorization code and store the refresh token.
 
     Returns ``run_check("clio", secrets)``'s result on success; raises
@@ -145,19 +190,24 @@ def clio_exchange(secrets: SecretsClient, payload: dict[str, Any]) -> dict[str, 
         candidate["base_url"] = base_url
 
     secrets.put("aphrodite/clio", candidate)
-    return run_check("clio", secrets)
+    result = run_check("clio", secrets)
+    _record_health(integrations, "clio", result)
+    return result
 
 
 def quickbooks_start(
     secrets: SecretsClient, payload: dict[str, Any], *, redirect_uri: str
 ) -> dict[str, Any]:
-    """Store pending QuickBooks app credentials and return the authorize URL.
+    """Stage pending QuickBooks app credentials and return the authorize URL.
 
-    The secret is written *before* the redirect, holding no refresh token
-    yet, so the callback (which Intuit invokes with no way to ask the admin
-    for client_id/client_secret again) can read them back out. A fresh call
-    always overwrites — the same control serves both first connect and
-    reconnect.
+    The pending credentials are written under a ``_pending`` sub-key of the
+    *existing* secret (not over it) — holding no refresh token yet, so the
+    callback (which Intuit invokes with no way to ask the admin for
+    client_id/client_secret again) can read them back out. Any already-working
+    credential (``client_id``/``refresh_token``/``realm_id`` from a prior
+    connect) is left untouched until the callback actually succeeds, so a
+    reconnect that's never completed (the admin closes the tab, a wrong
+    client_secret) can't destroy a working connection.
     """
     client_id = str(payload.get("client_id") or "").strip()
     client_secret = str(payload.get("client_secret") or "")
@@ -169,16 +219,20 @@ def quickbooks_start(
             f"environment must be one of {_QUICKBOOKS_ENVIRONMENTS!r}"
         )
 
+    try:
+        current = secrets.get("aphrodite/quickbooks")
+    except Exception:  # noqa: BLE001 - no existing secret yet is the common first-connect case
+        current = {}
+    current = dict(current) if isinstance(current, dict) else {}
+
     state = _pysecrets.token_urlsafe(24)
-    secrets.put(
-        "aphrodite/quickbooks",
-        {
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "environment": environment,
-            "_oauth_state": state,
-        },
-    )
+    current["_pending"] = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "environment": environment,
+        "state": state,
+    }
+    secrets.put("aphrodite/quickbooks", current)
 
     from backend.connectors.quickbooks.oauth_bootstrap import build_authorize_url
 
@@ -186,37 +240,71 @@ def quickbooks_start(
     return {"url": url}
 
 
+def _clear_pending(secrets: SecretsClient) -> None:
+    """Best-effort: drop a stale ``_pending`` entry so a replayed/expired
+    callback link can't be completed later. Never raises."""
+    try:
+        stored = secrets.get("aphrodite/quickbooks", refresh=True)
+        if isinstance(stored, dict) and "_pending" in stored:
+            stored = dict(stored)
+            stored.pop("_pending", None)
+            secrets.put("aphrodite/quickbooks", stored)
+    except Exception:  # noqa: BLE001 - best-effort cleanup only
+        pass
+
+
 def quickbooks_callback(
-    secrets: SecretsClient, query: dict[str, Any], *, redirect_uri: str, app_base_url: str
+    secrets: SecretsClient,
+    query: dict[str, Any],
+    *,
+    redirect_uri: str,
+    app_base_url: str,
+    integrations: "IntegrationHealthStore | None" = None,
 ) -> str:
     """Complete the QuickBooks OAuth redirect; always returns a redirect URL.
 
     Never raises — its only caller is a browser-facing GET with no way to
-    render a JSON error, so any failure (missing params, a state mismatch,
-    a failed exchange) redirects to an error page instead.
+    render a JSON error, so any failure (missing params, a state mismatch, a
+    failed exchange, a missing realmId) redirects to an error page instead,
+    and leaves any existing working credential exactly as it was.
     """
     try:
         stored = secrets.get("aphrodite/quickbooks", refresh=True)
+        pending = stored.get("_pending") if isinstance(stored, dict) else None
+        if not isinstance(pending, dict):
+            raise ConnectorValidationError("no pending QuickBooks connection")
+
         code = query.get("code")
         state = query.get("state")
-        if not code or not state or state != stored.get("_oauth_state"):
-            raise ConnectorValidationError("missing or mismatched OAuth state")
+        realm_id = query.get("realmId")
+        if not code or not state or not realm_id or state != pending.get("state"):
+            raise ConnectorValidationError("missing or mismatched OAuth callback parameters")
 
         from backend.connectors.quickbooks.oauth_bootstrap import exchange_code
 
         token_payload = exchange_code(
-            stored["client_id"], stored["client_secret"], code, redirect_uri=redirect_uri
+            pending["client_id"], pending["client_secret"], code, redirect_uri=redirect_uri
         )
-        stored.pop("_oauth_state", None)
+
+        stored = dict(stored)
+        stored.pop("_pending", None)
+        stored["client_id"] = pending["client_id"]
+        stored["client_secret"] = pending["client_secret"]
+        stored["environment"] = pending["environment"]
         stored["refresh_token"] = token_payload["refresh_token"]
-        stored["realm_id"] = query.get("realmId")
+        stored["realm_id"] = realm_id
         secrets.put("aphrodite/quickbooks", stored)
 
         try:
-            run_check("quickbooks", secrets)
+            result = run_check("quickbooks", secrets)
         except Exception:  # noqa: BLE001 - a health-check hiccup must not undo a real success
-            pass
+            result = {"ok": True, "detail": "ok"}
+        _record_health(integrations, "quickbooks", result)
 
         return f"{app_base_url}/?setup=quickbooks-connected"
-    except Exception:  # noqa: BLE001 - this function must never raise; see docstring
+    except Exception as exc:  # noqa: BLE001 - this function must never raise; see docstring
+        logger.warning(
+            "QuickBooks callback failed", extra={"extra_fields": {"error_type": type(exc).__name__}}
+        )
+        _clear_pending(secrets)
         return f"{app_base_url}/?setup=quickbooks-error"

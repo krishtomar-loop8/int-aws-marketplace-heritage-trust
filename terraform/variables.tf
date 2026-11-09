@@ -241,11 +241,9 @@ variable "letterhead_privacy_notice" {
 }
 
 # -- Connector onboarding & reconnect (Setup screen) -------------------------
-
-variable "app_base_url" {
-  type        = string
-  description = "The deployed SPA's origin (e.g. CloudFront domain), used to redirect the browser back after the QuickBooks OAuth callback."
-}
+# app_base_url is not a variable here — it's derived from the SPA's own
+# origin(s) (see local.web_origins in main.tf), which already accounts for
+# the custom domain, so a deployer never has to supply it separately.
 
 variable "integrations_alert_emails" {
   type        = list(string)

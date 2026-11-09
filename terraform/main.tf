@@ -93,8 +93,10 @@ module "search_api" {
   org_name                    = var.org_name
   org_office_address          = var.org_office_address
   excluded_sharepoint_folders = var.excluded_sharepoint_folders
-  # Connector onboarding: the Setup screen's redirect target + down-connector alert.
-  app_base_url              = var.app_base_url
+  # Connector onboarding: the Setup screen's redirect target (prefer the
+  # custom domain once it's live, else CloudFront — same preference
+  # local.web_origins already encodes) + down-connector alert.
+  app_base_url              = var.enable_custom_domain ? "https://${var.custom_domain}" : module.web.cloudfront_url
   integrations_alert_emails = var.integrations_alert_emails
 }
 

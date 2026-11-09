@@ -472,6 +472,21 @@ def test_is_admin_false_for_other_group() -> None:
     assert handlers._is_admin(_event_with_groups('["staff"]')) is False
 
 
+def test_is_admin_true_for_api_gateway_bracketed_space_separated_single_group() -> None:
+    # API Gateway's HTTP API JWT authorizer serializes a multi-value claim
+    # Go-style: "[admins]" for one group, "[admins staff]" for several —
+    # never JSON, and never comma-separated.
+    assert handlers._is_admin(_event_with_groups("[admins]")) is True
+
+
+def test_is_admin_true_for_api_gateway_bracketed_space_separated_multiple_groups() -> None:
+    assert handlers._is_admin(_event_with_groups("[staff admins]")) is True
+
+
+def test_is_admin_false_for_api_gateway_bracketed_other_group() -> None:
+    assert handlers._is_admin(_event_with_groups("[staff]")) is False
+
+
 def test_is_admin_false_when_claim_missing() -> None:
     assert handlers._is_admin({"requestContext": {"authorizer": {"jwt": {"claims": {}}}}}) is False
 
@@ -505,7 +520,7 @@ def test_connect_estateably_route_success(monkeypatch: pytest.MonkeyPatch) -> No
     install_deps(monkeypatch)
     monkeypatch.setattr(
         handlers.connectors_admin, "connect_estateably",
-        lambda secrets, body: {"ok": True, "detail": "ok"},
+        lambda secrets, body, **kwargs: {"ok": True, "detail": "ok"},
     )
     resp = handlers.handler(
         admin_api_event("POST", "/connectors/estateably", body={"username": "u", "password": "p"})
@@ -523,7 +538,7 @@ def test_connect_graph_route_success(monkeypatch: pytest.MonkeyPatch) -> None:
     install_deps(monkeypatch)
     monkeypatch.setattr(
         handlers.connectors_admin, "connect_graph",
-        lambda secrets, body: {"ok": True, "detail": "ok"},
+        lambda secrets, body, **kwargs: {"ok": True, "detail": "ok"},
     )
     resp = handlers.handler(
         admin_api_event(
@@ -561,7 +576,7 @@ def test_clio_exchange_route_success(monkeypatch: pytest.MonkeyPatch) -> None:
     install_deps(monkeypatch)
     monkeypatch.setattr(
         handlers.connectors_admin, "clio_exchange",
-        lambda secrets, body: {"ok": True, "detail": "ok"},
+        lambda secrets, body, **kwargs: {"ok": True, "detail": "ok"},
     )
     resp = handlers.handler(
         admin_api_event(

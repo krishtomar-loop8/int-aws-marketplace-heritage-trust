@@ -279,10 +279,12 @@ ADMIN_GROUP_NAME = "admins"
 def _is_admin(event: dict[str, Any]) -> bool:
     """True if the caller's JWT carries the admin Cognito group.
 
-    API Gateway's JWT authorizer serializes a multi-value claim like
-    ``cognito:groups`` as a JSON-array string (e.g. ``'["admins"]'``); a
-    single-group membership may come through as a plain string instead. Any
-    parse failure is treated as a single group name rather than raising.
+    API Gateway's HTTP API JWT authorizer serializes a multi-value claim
+    like ``cognito:groups`` Go-style — ``"[admins]"`` for one group,
+    ``"[admins staff]"`` for several, space-separated, never JSON and never
+    comma-separated. A JSON-array string and a bare unbracketed group name
+    are also accepted defensively. Any parse failure is treated as a single
+    group name rather than raising.
     """
     try:
         claims = event["requestContext"]["authorizer"]["jwt"]["claims"]
@@ -291,11 +293,16 @@ def _is_admin(event: dict[str, Any]) -> bool:
     raw = claims.get("cognito:groups", "")
     if not raw:
         return False
-    if raw.startswith("["):
+    if isinstance(raw, list):
+        groups = raw
+    elif raw.startswith("[") and raw.endswith("]"):
+        inner = raw[1:-1]
         try:
             groups = json.loads(raw)
+            if not isinstance(groups, list):
+                groups = inner.split()
         except (ValueError, TypeError):
-            groups = [raw]
+            groups = inner.split()
     else:
         groups = [raw]
     return ADMIN_GROUP_NAME in groups
@@ -605,7 +612,9 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
         if forbidden:
             return forbidden
         try:
-            result = connectors_admin.connect_estateably(deps.secrets, _body(event))
+            result = connectors_admin.connect_estateably(
+                deps.secrets, _body(event), integrations=deps.integrations
+            )
         except connectors_admin.ConnectorValidationError as exc:
             return _response(400, {"error": str(exc)})
         return _response(200, result)
@@ -615,7 +624,9 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
         if forbidden:
             return forbidden
         try:
-            result = connectors_admin.connect_graph(deps.secrets, _body(event))
+            result = connectors_admin.connect_graph(
+                deps.secrets, _body(event), integrations=deps.integrations
+            )
         except connectors_admin.ConnectorValidationError as exc:
             return _response(400, {"error": str(exc)})
         return _response(200, result)
@@ -635,7 +646,9 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
         if forbidden:
             return forbidden
         try:
-            result = connectors_admin.clio_exchange(deps.secrets, _body(event))
+            result = connectors_admin.clio_exchange(
+                deps.secrets, _body(event), integrations=deps.integrations
+            )
         except connectors_admin.ConnectorValidationError as exc:
             return _response(400, {"error": str(exc)})
         return _response(200, result)
@@ -664,6 +677,7 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
             query,
             redirect_uri=os.environ["APHRODITE_QUICKBOOKS_REDIRECT_URI"],
             app_base_url=os.environ["APHRODITE_APP_BASE_URL"],
+            integrations=deps.integrations,
         )
         return {"statusCode": 302, "headers": {"Location": url}}
 
