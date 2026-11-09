@@ -361,7 +361,7 @@ export async function connectGraph(
 
 export async function clioAuthorizeUrl(
   base: string,
-  body: { client_id: string },
+  body: { client_id: string; base_url?: string },
   token?: string,
 ): Promise<{ url: string; state: string }> {
   const res = await fetch(`${base}/connectors/clio/authorize-url`, {
@@ -378,7 +378,7 @@ export async function clioAuthorizeUrl(
 
 export async function clioExchange(
   base: string,
-  body: { client_id: string; client_secret: string; code: string },
+  body: { client_id: string; client_secret: string; code: string; base_url?: string },
   token?: string,
 ): Promise<ConnectorActionResult> {
   const res = await fetch(`${base}/connectors/clio/exchange`, {

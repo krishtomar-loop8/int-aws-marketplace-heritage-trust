@@ -130,10 +130,12 @@ export function IntegrationsPanel({
   apiBase,
   token,
   isAdmin = false,
+  setupResult = null,
 }: {
   apiBase: string;
   token?: string;
   isAdmin?: boolean;
+  setupResult?: string | null;
 }) {
   const { health, loading, refresh } = useIntegrationsHealth();
   const { integrations, log, alerting } = health;
@@ -160,6 +162,16 @@ export function IntegrationsPanel({
           Refresh
         </button>
       </div>
+
+      {setupResult === "quickbooks-connected" && (
+        <p className="banner banner-ok">QuickBooks connected — validated.</p>
+      )}
+      {setupResult === "quickbooks-error" && (
+        <p className="banner banner-error">
+          The QuickBooks connection didn't complete. Any previously-working connection is
+          unaffected — check the details below and try again.
+        </p>
+      )}
 
       {alerting && (
         <p className="banner banner-error">

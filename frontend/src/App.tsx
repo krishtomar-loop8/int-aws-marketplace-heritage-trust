@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ActivityLogPanel } from "./components/ActivityLogPanel";
 import { AmlExportPanel } from "./components/AmlExportPanel";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -11,6 +11,15 @@ import { Sidebar } from "./components/Sidebar";
 import { IntegrationsHealthProvider } from "./lib/integrationsHealth";
 import { SearchJobsProvider } from "./lib/searchJobs";
 import { DEFAULT_TAB, TABS, type TabId } from "./nav";
+
+// Read once at module scope — the QuickBooks OAuth callback redirects the
+// browser here with ?setup=quickbooks-connected|quickbooks-error, since
+// that leg of the flow has no in-page fetch response to show an error on
+// (the browser leaves the app entirely for the Intuit consent screen).
+function readSetupResult(): string | null {
+  if (typeof window === "undefined") return null;
+  return new URLSearchParams(window.location.search).get("setup");
+}
 
 export function App({
   apiBase,
@@ -27,11 +36,21 @@ export function App({
   onSignOut?: () => void;
   isAdmin?: boolean;
 }) {
-  const [activeTab, setActiveTab] = useState<TabId>(DEFAULT_TAB);
+  const [setupResult] = useState<string | null>(readSetupResult);
+  const [activeTab, setActiveTab] = useState<TabId>(() =>
+    readSetupResult() ? "integrations" : DEFAULT_TAB,
+  );
   const [collapsed, setCollapsed] = useState(false); // desktop rail
   const [mobileOpen, setMobileOpen] = useState(false); // mobile drawer
 
   const active = TABS.find((t) => t.id === activeTab) ?? TABS[0];
+
+  // Clear the query param once read so a page refresh doesn't re-show it.
+  useEffect(() => {
+    if (setupResult) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, [setupResult]);
 
   function select(id: TabId) {
     setActiveTab(id);
@@ -87,7 +106,12 @@ export function App({
               ) : activeTab === "activity-log" ? (
                 <ActivityLogPanel apiBase={apiBase} token={token} mock={mock} />
               ) : activeTab === "integrations" ? (
-                <IntegrationsPanel apiBase={apiBase} token={token} isAdmin={isAdmin} />
+                <IntegrationsPanel
+                  apiBase={apiBase}
+                  token={token}
+                  isAdmin={isAdmin}
+                  setupResult={setupResult}
+                />
               ) : (
                 <Placeholder tab={active} />
               )}

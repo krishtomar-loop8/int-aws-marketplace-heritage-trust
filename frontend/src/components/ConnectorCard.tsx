@@ -13,6 +13,7 @@ import {
   quickbooksStart,
 } from "../api";
 import { useIntegrationsHealth } from "../lib/integrationsHealth";
+import type { ConnectorActionResult } from "../types";
 
 function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : "Something went wrong.";
@@ -21,6 +22,21 @@ function errorMessage(e: unknown): string {
 interface CardProps {
   apiBase: string;
   token?: string;
+}
+
+// A 200 response doesn't always mean "working" — the credential may have
+// validated but the fuller connectivity check still failed (e.g. missing
+// permissions). Show that distinction instead of treating any 200 as success.
+function ResultNotice({ result }: { result: ConnectorActionResult | null }) {
+  if (!result) return null;
+  if (result.ok) {
+    return <p className="banner banner-ok">Connected — validated.</p>;
+  }
+  return (
+    <p className="banner banner-error">
+      Credential saved, but the connection check failed: {result.detail || "unknown error"}
+    </p>
+  );
 }
 
 function QuickBooksCard({ apiBase, token }: CardProps) {
@@ -77,17 +93,21 @@ function ClioCard({ apiBase, token }: CardProps) {
   const { refresh } = useIntegrationsHealth();
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
   const [authorizeUrl, setAuthorizeUrl] = useState<string | null>(null);
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<ConnectorActionResult | null>(null);
 
   async function getLink() {
     setBusy(true);
     setError(null);
+    setResult(null);
     try {
-      const result = await clioAuthorizeUrl(apiBase, { client_id: clientId }, token);
-      setAuthorizeUrl(result.url);
+      const body = { client_id: clientId, ...(baseUrl ? { base_url: baseUrl } : {}) };
+      const link = await clioAuthorizeUrl(apiBase, body, token);
+      setAuthorizeUrl(link.url);
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -99,7 +119,14 @@ function ClioCard({ apiBase, token }: CardProps) {
     setBusy(true);
     setError(null);
     try {
-      await clioExchange(apiBase, { client_id: clientId, client_secret: clientSecret, code }, token);
+      const body = {
+        client_id: clientId,
+        client_secret: clientSecret,
+        code,
+        ...(baseUrl ? { base_url: baseUrl } : {}),
+      };
+      const r = await clioExchange(apiBase, body, token);
+      setResult(r);
       await refresh();
       setAuthorizeUrl(null);
       setCode("");
@@ -119,6 +146,14 @@ function ClioCard({ apiBase, token }: CardProps) {
       <label className="field">
         <span>Client secret</span>
         <input type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} />
+      </label>
+      <label className="field">
+        <span>Region / pod (optional — leave blank for the US pod)</span>
+        <input
+          value={baseUrl}
+          onChange={(e) => setBaseUrl(e.target.value)}
+          placeholder="https://ca.app.clio.com/api/v4"
+        />
       </label>
       <button className="link-btn" onClick={getLink} disabled={busy || !clientId}>
         {busy && !authorizeUrl ? <span className="spinner" aria-hidden="true" /> : "Generate authorization link"}
@@ -141,6 +176,7 @@ function ClioCard({ apiBase, token }: CardProps) {
         </>
       )}
       {error && <p className="banner banner-error">{error}</p>}
+      <ResultNotice result={result} />
     </div>
   );
 }
@@ -152,16 +188,18 @@ function EstateablyCard({ apiBase, token }: CardProps) {
   const [baseUrl, setBaseUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<ConnectorActionResult | null>(null);
 
   async function connect() {
     setBusy(true);
     setError(null);
     try {
-      await connectEstateably(
+      const r = await connectEstateably(
         apiBase,
         { username, password, ...(baseUrl ? { base_url: baseUrl } : {}) },
         token,
       );
+      setResult(r);
       await refresh();
     } catch (e) {
       setError(errorMessage(e));
@@ -192,6 +230,7 @@ function EstateablyCard({ apiBase, token }: CardProps) {
         {busy ? <span className="spinner" aria-hidden="true" /> : "Save & validate"}
       </button>
       {error && <p className="banner banner-error">{error}</p>}
+      <ResultNotice result={result} />
     </div>
   );
 }
@@ -203,16 +242,18 @@ function GraphCard({ apiBase, token }: CardProps) {
   const [clientSecret, setClientSecret] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<ConnectorActionResult | null>(null);
 
   async function connect() {
     setBusy(true);
     setError(null);
     try {
-      await connectGraph(
+      const r = await connectGraph(
         apiBase,
         { tenant_id: tenantId, client_id: clientId, client_secret: clientSecret },
         token,
       );
+      setResult(r);
       await refresh();
     } catch (e) {
       setError(errorMessage(e));
@@ -246,6 +287,7 @@ function GraphCard({ apiBase, token }: CardProps) {
         {busy ? <span className="spinner" aria-hidden="true" /> : "Save & validate"}
       </button>
       {error && <p className="banner banner-error">{error}</p>}
+      <ResultNotice result={result} />
     </div>
   );
 }
