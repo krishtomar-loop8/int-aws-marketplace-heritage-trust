@@ -528,6 +528,31 @@ def test_connect_estateably_route_success(monkeypatch: pytest.MonkeyPatch) -> No
     assert resp["statusCode"] == 200
 
 
+def test_connect_estateably_route_records_activity_against_the_real_signature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Important (I7): a credential write must leave a who-did-it audit trail,
+    # not just a CloudTrail PutSecretValue attributed to the Lambda role.
+    # Uses the real ActivityLog.record (not the looser FakeActivity double)
+    # so a bad kwarg (e.g. one record() doesn't accept) fails this test.
+    from backend.api.activity import ActivityLog
+
+    class _FakeDdb:
+        def put_item(self, *, TableName, Item):
+            pass
+
+    deps, _ = install_deps(monkeypatch)
+    deps.activity = ActivityLog("t", client=_FakeDdb())
+    monkeypatch.setattr(
+        handlers.connectors_admin, "connect_estateably",
+        lambda secrets, body, **kwargs: {"ok": True, "detail": "ok"},
+    )
+    resp = handlers.handler(
+        admin_api_event("POST", "/connectors/estateably", body={"username": "u", "password": "p"})
+    )
+    assert resp["statusCode"] == 200
+
+
 def test_connect_graph_route_requires_admin(monkeypatch: pytest.MonkeyPatch) -> None:
     install_deps(monkeypatch)
     resp = handlers.handler(api_event("POST", "/connectors/graph", body={}))

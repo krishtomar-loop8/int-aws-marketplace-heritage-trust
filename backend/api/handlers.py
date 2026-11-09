@@ -617,6 +617,7 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
             )
         except connectors_admin.ConnectorValidationError as exc:
             return _response(400, {"error": str(exc)})
+        _record(deps, event, "connector.connect", "Connected Estateably", target="estateably")
         return _response(200, result)
 
     if method == "POST" and path.endswith("/connectors/graph"):
@@ -629,6 +630,7 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
             )
         except connectors_admin.ConnectorValidationError as exc:
             return _response(400, {"error": str(exc)})
+        _record(deps, event, "connector.connect", "Connected Microsoft Graph", target="graph")
         return _response(200, result)
 
     if method == "POST" and path.endswith("/connectors/clio/authorize-url"):
@@ -651,6 +653,7 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
             )
         except connectors_admin.ConnectorValidationError as exc:
             return _response(400, {"error": str(exc)})
+        _record(deps, event, "connector.connect", "Connected Clio", target="clio")
         return _response(200, result)
 
     if method == "POST" and path.endswith("/connectors/quickbooks/start"):
@@ -665,6 +668,7 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
             )
         except connectors_admin.ConnectorValidationError as exc:
             return _response(400, {"error": str(exc)})
+        _record(deps, event, "connector.connect", "Started a QuickBooks connection", target="quickbooks")
         return _response(200, result)
 
     # Hit directly by Intuit's browser redirect — no Authorization header,
