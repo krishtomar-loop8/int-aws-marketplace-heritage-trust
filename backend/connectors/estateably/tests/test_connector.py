@@ -426,7 +426,8 @@ def test_login_itself_retries_with_fresh_secret_on_stale_cached_credentials():
     connector = EstateablyConnector(secrets, http=http)
 
     add_login(status=401)  # stale cached creds rejected
-    secrets._secret = {"username": "new", "password": "new-pw", "base_url": BASE_URL}  # admin reconnected
+    # admin reconnected
+    secrets._secret = {"username": "new", "password": "new-pw", "base_url": BASE_URL}
     add_login(token=TOKEN_2)  # only matches once the retry reads the NEW secret
     responses.add(
         responses.GET,

@@ -229,9 +229,11 @@ a top-level "sources_reviewed" array — the platform records the reviewed sourc
 deterministically; the "sources_reviewed" SECTION entry is still a text string.
 Set "insufficient_info" to true ONLY when a core source (Estateably, Clio, Outlook)
 is absent from the dossier or the dossier's errors show a failed pull that prevents
-confirming a core section. Individually unconfirmed items belong in their sections
-("treat unconfirmed items as outstanding") and do NOT make this flag true; when
-every section could be grounded in the dossier, set it false.
+confirming a core section. A source listed in the dossier's "disabled_sources" was
+never queried by design (this deployment turned it off) — never treat it as a gap
+and never let it alone make this flag true. Individually unconfirmed items belong
+in their sections ("treat unconfirmed items as outstanding") and do NOT make this
+flag true; when every section could be grounded in the dossier, set it false.
 Section keys (use all, in this order): current_stage, completed_items,
 outlook_correspondence, outstanding_from_correspondence, kyc_intake, tax_status,
 assets_liabilities_banking, distribution_readiness, upcoming_deadlines,
@@ -251,7 +253,9 @@ real ids present in the dossier; every id in a marker MUST correspond to a recor
 present in the dossier. Do NOT emit a separate citations array — the inline markers
 ARE the citations, and repeating every id in an array only bloats the response. If
 a source (e.g. Outlook/SharePoint) is absent from the dossier, state that it was
-not available rather than inventing content.
+not available rather than inventing content. A source listed in the dossier's
+"disabled_sources" was never queried by design — describe it as not used by this
+deployment, never as unavailable or failed.
 """
 
 

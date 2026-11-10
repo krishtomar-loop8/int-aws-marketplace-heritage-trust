@@ -4,6 +4,10 @@ locals {
   function_name = "aphrodite-search"
   # Self-invoke ARN built from the (known) name to avoid a role→function→role cycle.
   function_arn = "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${local.function_name}"
+  # Modular architecture (Phase 2): an empty-string ARN means "disabled" — IAM
+  # rejects a statement with an empty/missing Resource, so every statement built
+  # from one of these must itself become conditional, not just filter the value.
+  readable_secret_arns = [for arn in var.secret_arns : arn if arn != ""]
 }
 
 # -- job store --------------------------------------------------------------
@@ -147,39 +151,58 @@ data "aws_iam_policy_document" "search" {
     actions   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
     resources = ["arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:*"]
   }
-  statement {
-    sid       = "ReadSecrets"
-    actions   = ["secretsmanager:GetSecretValue"]
-    resources = var.secret_arns
+  # Granted only when at least one connector is enabled — an IAM statement with
+  # an empty Resource list is rejected at apply time, not caught by `validate`.
+  dynamic "statement" {
+    for_each = length(local.readable_secret_arns) > 0 ? [1] : []
+    content {
+      sid       = "ReadSecrets"
+      actions   = ["secretsmanager:GetSecretValue"]
+      resources = local.readable_secret_arns
+    }
   }
-  statement {
-    # QuickBooks rotates its OAuth refresh token on every refresh and invalidates
-    # the prior one; the connector persists the rotated value so it survives cold
-    # starts. Write scoped to the QuickBooks secret only.
-    sid       = "WriteQuickBooksToken"
-    actions   = ["secretsmanager:PutSecretValue"]
-    resources = [var.quickbooks_secret_arn]
+  # QuickBooks rotates its OAuth refresh token on every refresh and invalidates
+  # the prior one; the connector persists the rotated value so it survives cold
+  # starts. Write scoped to the QuickBooks secret only — and only granted when
+  # the connector is enabled (a disabled connector's secret is paused, not
+  # destroyed, so it's simply never written to).
+  dynamic "statement" {
+    for_each = var.quickbooks_secret_arn != "" ? [1] : []
+    content {
+      sid       = "WriteQuickBooksToken"
+      actions   = ["secretsmanager:PutSecretValue"]
+      resources = [var.quickbooks_secret_arn]
+    }
   }
-  statement {
-    # Clio likewise rotates its OAuth refresh token on refresh; the connector
-    # persists the rotated value so it survives cold starts (without this the
-    # stored token goes stale and paginated Clio calls 401). Scoped to Clio only.
-    sid       = "WriteClioToken"
-    actions   = ["secretsmanager:PutSecretValue"]
-    resources = [var.clio_secret_arn]
+  # Clio likewise rotates its OAuth refresh token on refresh; the connector
+  # persists the rotated value so it survives cold starts (without this the
+  # stored token goes stale and paginated Clio calls 401). Scoped to Clio only.
+  dynamic "statement" {
+    for_each = var.clio_secret_arn != "" ? [1] : []
+    content {
+      sid       = "WriteClioToken"
+      actions   = ["secretsmanager:PutSecretValue"]
+      resources = [var.clio_secret_arn]
+    }
   }
   # Connector onboarding: the admin-gated /connectors/* routes write a
   # freshly-validated credential to each connector's own secret. Scoped one
   # statement per secret, same discipline as the OAuth-rotation writes above.
-  statement {
-    sid       = "WriteEstateablyCredential"
-    actions   = ["secretsmanager:PutSecretValue"]
-    resources = [var.estateably_secret_arn]
+  dynamic "statement" {
+    for_each = var.estateably_secret_arn != "" ? [1] : []
+    content {
+      sid       = "WriteEstateablyCredential"
+      actions   = ["secretsmanager:PutSecretValue"]
+      resources = [var.estateably_secret_arn]
+    }
   }
-  statement {
-    sid       = "WriteGraphCredential"
-    actions   = ["secretsmanager:PutSecretValue"]
-    resources = [var.graph_secret_arn]
+  dynamic "statement" {
+    for_each = var.graph_secret_arn != "" ? [1] : []
+    content {
+      sid       = "WriteGraphCredential"
+      actions   = ["secretsmanager:PutSecretValue"]
+      resources = [var.graph_secret_arn]
+    }
   }
   statement {
     sid       = "PublishIntegrationsAlert"
@@ -297,32 +320,45 @@ data "aws_iam_policy_document" "search" {
   }
   # On-demand quarterly generation: the portal triggers the quarterly-report
   # Lambda (which does the Clio reads + S3 write) via POST /reports/generate.
-  statement {
-    sid       = "InvokeQuarterly"
-    actions   = ["lambda:InvokeFunction"]
-    resources = [var.quarterly_function_arn]
+  # Granted only when the module is deployed (its function ARN is "" otherwise).
+  dynamic "statement" {
+    for_each = var.quarterly_function_arn != "" ? [1] : []
+    content {
+      sid       = "InvokeQuarterly"
+      actions   = ["lambda:InvokeFunction"]
+      resources = [var.quarterly_function_arn]
+    }
   }
   # On-demand AML export "run now": the portal invokes the AML export Lambda.
-  statement {
-    sid       = "InvokeAmlExport"
-    actions   = ["lambda:InvokeFunction"]
-    resources = [var.aml_export_function_arn]
+  dynamic "statement" {
+    for_each = var.aml_export_function_arn != "" ? [1] : []
+    content {
+      sid       = "InvokeAmlExport"
+      actions   = ["lambda:InvokeFunction"]
+      resources = [var.aml_export_function_arn]
+    }
   }
   # Self-serve AML schedule: read + update the EventBridge schedule, and pass the
   # scheduler's role on update (scoped to that one role + the scheduler service).
-  statement {
-    sid       = "ManageAmlSchedule"
-    actions   = ["scheduler:GetSchedule", "scheduler:UpdateSchedule"]
-    resources = [var.aml_schedule_arn]
+  dynamic "statement" {
+    for_each = var.aml_schedule_arn != "" ? [1] : []
+    content {
+      sid       = "ManageAmlSchedule"
+      actions   = ["scheduler:GetSchedule", "scheduler:UpdateSchedule"]
+      resources = [var.aml_schedule_arn]
+    }
   }
-  statement {
-    sid       = "PassSchedulerRole"
-    actions   = ["iam:PassRole"]
-    resources = [var.aml_scheduler_role_arn]
-    condition {
-      test     = "StringEquals"
-      variable = "iam:PassedToService"
-      values   = ["scheduler.amazonaws.com"]
+  dynamic "statement" {
+    for_each = var.aml_scheduler_role_arn != "" ? [1] : []
+    content {
+      sid       = "PassSchedulerRole"
+      actions   = ["iam:PassRole"]
+      resources = [var.aml_scheduler_role_arn]
+      condition {
+        test     = "StringEquals"
+        variable = "iam:PassedToService"
+        values   = ["scheduler.amazonaws.com"]
+      }
     }
   }
 }
@@ -379,6 +415,11 @@ resource "aws_lambda_function" "search" {
       APHRODITE_QUICKBOOKS_REDIRECT_URI      = "${aws_apigatewayv2_api.search.api_endpoint}/connectors/quickbooks/callback"
       APHRODITE_APP_BASE_URL                 = var.app_base_url
       APHRODITE_INTEGRATIONS_ALERT_TOPIC_ARN = aws_sns_topic.integrations_alert.arn
+      APHRODITE_CLIO_ENABLED                 = var.clio_enabled
+      APHRODITE_ESTATEABLY_ENABLED           = var.estateably_enabled
+      APHRODITE_QUICKBOOKS_ENABLED           = var.quickbooks_enabled
+      APHRODITE_GRAPH_ENABLED                = var.graph_enabled
+      APHRODITE_SANCTION_SCREENER_ENABLED    = var.sanction_screener_enabled
     }
   }
 
@@ -487,6 +528,7 @@ resource "aws_apigatewayv2_route" "routes" {
     "DELETE /screener/certificates",
     "GET /activity",
     "GET /integrations",
+    "GET /capabilities",
     "POST /connectors/estateably",
     "POST /connectors/graph",
     "POST /connectors/clio/authorize-url",

@@ -84,8 +84,8 @@ output "outputs_bucket" {
 }
 
 output "quarterly_report_function" {
-  description = "Quarterly report generator Lambda name (manual invoke for the pilot)."
-  value       = module.quarterly_report.function_name
+  description = "Quarterly report generator Lambda name (manual invoke for the pilot). Null when quarterly_enabled is false."
+  value       = var.quarterly_enabled ? module.quarterly_report[0].function_name : null
 }
 
 output "reference_bucket" {
@@ -94,6 +94,6 @@ output "reference_bucket" {
 }
 
 output "sanctions_refresh_function" {
-  description = "Sanctions-refresh Lambda name (manual invoke to seed/refresh the watchlist bundle)."
-  value       = module.sanctions_refresh.function_name
+  description = "Sanctions-refresh Lambda name (manual invoke to seed/refresh the watchlist bundle). Null when sanction_screener_enabled is false."
+  value       = var.sanction_screener_enabled ? module.sanctions_refresh[0].function_name : null
 }

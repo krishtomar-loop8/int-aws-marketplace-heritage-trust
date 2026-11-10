@@ -219,10 +219,13 @@ def test_fetch_token_itself_retries_with_fresh_secret_on_stale_cached_credential
     # self._headers() OUTSIDE its try/except, so it has no accidental safety
     # net — the self-healing retry must live inside _fetch_token itself, not
     # rely on a caller's retry structure.
-    secrets = FakeSecretsClient({"tenant_id": TENANT_ID, "client_id": "old-id", "client_secret": "old-secret"})
+    secrets = FakeSecretsClient(
+        {"tenant_id": TENANT_ID, "client_id": "old-id", "client_secret": "old-secret"}
+    )
     connector = GraphConnector(secrets)
 
-    responses.add(responses.POST, TOKEN_URL, json={"error": "invalid_client"}, status=401)  # stale creds rejected
+    # stale creds rejected
+    responses.add(responses.POST, TOKEN_URL, json={"error": "invalid_client"}, status=401)
     secrets._secret = {"tenant_id": TENANT_ID, "client_id": "new-id", "client_secret": "new-secret"}
     _add_token(token="tok-2")  # only matches once the retry reads the NEW secret
     responses.add(responses.GET, f"{BASE}/users", json={"value": [{"id": "u1"}]}, status=200)
@@ -239,7 +242,9 @@ def test_401_after_reconnect_uses_fresh_secret_not_cache() -> None:
     # changes in Secrets Manager), next call 401s on the stale cached token,
     # and the forced refresh must re-read the secret rather than reusing the
     # cache.
-    secrets = FakeSecretsClient({"tenant_id": TENANT_ID, "client_id": "old-id", "client_secret": "old-secret"})
+    secrets = FakeSecretsClient(
+        {"tenant_id": TENANT_ID, "client_id": "old-id", "client_secret": "old-secret"}
+    )
     connector = GraphConnector(secrets)
     _add_token(token="tok-1")
     connector._ensure_token()

@@ -1,5 +1,6 @@
 import { Fragment, useState } from "react";
 import { ConnectorCard } from "./ConnectorCard";
+import type { Capabilities } from "../api";
 import { useIntegrationsHealth } from "../lib/integrationsHealth";
 import type { IntegrationStatus, IntegrationTransition } from "../types";
 
@@ -131,14 +132,22 @@ export function IntegrationsPanel({
   token,
   isAdmin = false,
   setupResult = null,
+  capabilities,
 }: {
   apiBase: string;
   token?: string;
   isAdmin?: boolean;
   setupResult?: string | null;
+  capabilities?: Capabilities;
 }) {
   const { health, loading, refresh } = useIntegrationsHealth();
-  const { integrations, log, alerting } = health;
+  const { log, alerting } = health;
+  // A connector the backend never asked about (e.g. a future "sharepoint" row
+  // with no capabilities entry of its own) stays visible by default.
+  const connectorCapabilities: Record<string, boolean> | undefined = capabilities?.connectors;
+  const integrations = connectorCapabilities
+    ? health.integrations.filter((row) => connectorCapabilities[row.integration] !== false)
+    : health.integrations;
   const down = integrations.filter((i) => !i.ok);
   const [expanded, setExpanded] = useState<string | null>(null);
 

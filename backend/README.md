@@ -39,3 +39,37 @@ require the Cognito **`admins`** group (see `_require_admin` in
 | `APHRODITE_QUICKBOOKS_REDIRECT_URI` | Hosted callback URL registered on the QuickBooks app |
 | `APHRODITE_APP_BASE_URL` (`app_base_url`) | SPA origin the QuickBooks callback redirects the browser back to |
 | `APHRODITE_INTEGRATIONS_ALERT_TOPIC_ARN` | SNS topic a connector-down alert publishes to (see `integrations_alert_emails`) |
+
+## Modular architecture: per-connector/module flags
+
+`_build_deps` (`backend/api/handlers.py`) reads five env vars to decide
+which connectors to construct and whether the Sanction Screener module is
+wired up; an absent/unset connector flag defaults to enabled (matching
+Terraform's own default), while the screener flag defaults to disabled:
+
+| Env / Terraform var | Default when unset | Purpose |
+|---|---|---|
+| `APHRODITE_CLIO_ENABLED` (`clio_enabled`) | `true` | Whether `ClioConnector` is constructed |
+| `APHRODITE_ESTATEABLY_ENABLED` (`estateably_enabled`) | `true` | Whether `EstateablyConnector` is constructed |
+| `APHRODITE_QUICKBOOKS_ENABLED` (`quickbooks_enabled`) | `true` | Whether `QuickBooksConnector` is constructed |
+| `APHRODITE_GRAPH_ENABLED` (`graph_enabled`) | `true` | Whether `GraphConnector` is constructed |
+| `APHRODITE_SANCTION_SCREENER_ENABLED` (`sanction_screener_enabled`) | `false` | Whether `ScreenerService` is wired up |
+
+A disabled connector's `/connectors/*` onboarding route (see above) 503s
+rather than attempting to write a credential, and Matter Search records it
+in each dossier's `disabled_sources` field (never treated as a gap by the
+synthesis prompt — see `backend/search/framework.py`). The Quarterly
+Reports and AML Export modules are gated by the presence of their Lambda
+function name env vars (`APHRODITE_QUARTERLY_FUNCTION` /
+`APHRODITE_AML_EXPORT_FUNCTION`), set only when `quarterly_enabled` /
+`aml_export_enabled` deploy that module's Lambda.
+
+`GET /capabilities` returns the resolved state of all seven flags for the
+frontend (module tab visibility, connector row filtering):
+
+```json
+{
+  "modules": {"quarterly_reports": false, "aml_export": true, "sanction_screener": false},
+  "connectors": {"clio": true, "estateably": true, "quickbooks": false, "graph": true}
+}
+```

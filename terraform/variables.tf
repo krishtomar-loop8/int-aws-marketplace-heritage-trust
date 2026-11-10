@@ -250,3 +250,50 @@ variable "integrations_alert_emails" {
   default     = []
   description = "Staff emails subscribed to the 'connector down' SNS alert topic."
 }
+
+# -- Modular architecture (Phase 2) ------------------------------------------
+
+variable "clio_enabled" {
+  type        = bool
+  default     = true
+  description = "Whether this deployment connects to Clio."
+}
+variable "estateably_enabled" {
+  type        = bool
+  default     = true
+  description = "Whether this deployment connects to Estateably."
+}
+variable "quickbooks_enabled" {
+  type        = bool
+  default     = true
+  description = "Whether this deployment connects to QuickBooks."
+}
+variable "graph_enabled" {
+  type        = bool
+  default     = true
+  description = "Whether this deployment connects to Microsoft Graph (Outlook/SharePoint)."
+}
+
+variable "quarterly_enabled" {
+  type        = bool
+  default     = false
+  description = "Whether the Quarterly Report Draft Generator module is deployed."
+  validation {
+    condition     = !var.quarterly_enabled || var.clio_enabled
+    error_message = "quarterly_enabled requires clio_enabled (Quarterly Reports reads Clio exclusively)."
+  }
+}
+variable "aml_export_enabled" {
+  type        = bool
+  default     = false
+  description = "Whether the Monthly AML Name Export module is deployed."
+  validation {
+    condition     = !var.aml_export_enabled || (var.clio_enabled && var.estateably_enabled)
+    error_message = "aml_export_enabled requires both clio_enabled and estateably_enabled."
+  }
+}
+variable "sanction_screener_enabled" {
+  type        = bool
+  default     = false
+  description = "Whether the Sanction Screener module (and its monthly watchlist refresh) is deployed."
+}

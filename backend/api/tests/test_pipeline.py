@@ -86,6 +86,22 @@ def test_search_not_found() -> None:
     assert out["status"] == "not_found"
 
 
+def test_search_no_sources_when_every_connector_disabled() -> None:
+    # Review Focus: all four connectors disabled is reachable (Matter Search
+    # itself can't be turned off) — an honest "no sources available" answer,
+    # not the same "not_found" a real zero-match search returns.
+    class NoSourcesResolver(FakeResolver):
+        sources_available = False
+
+    out = run_search(
+        "q",
+        resolver=NoSourcesResolver(_resolution([])),
+        dossier_builder=FakeBuilder(MatterDossier("x", None)),
+        synthesizer=FakeSynth(_synth()),
+    )
+    assert out["status"] == "no_sources"
+
+
 def test_search_disambiguation_when_multiple() -> None:
     cands = [_candidate("Smith Estate"), _candidate("Smithson Estate")]
     out = run_search(

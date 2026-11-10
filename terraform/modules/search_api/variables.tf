@@ -44,6 +44,30 @@ variable "integrations_alert_emails" {
   description = "Staff emails subscribed to the 'connector down' SNS alert topic."
 }
 
+# -- Modular architecture (Phase 2): per-connector/module enabled flags,
+# surfaced to the Lambda as env vars so _build_deps and /capabilities can
+# tell a disabled connector from one that's merely unreachable. --
+variable "clio_enabled" {
+  type        = bool
+  description = "Whether this deployment connects to Clio."
+}
+variable "estateably_enabled" {
+  type        = bool
+  description = "Whether this deployment connects to Estateably."
+}
+variable "quickbooks_enabled" {
+  type        = bool
+  description = "Whether this deployment connects to QuickBooks."
+}
+variable "graph_enabled" {
+  type        = bool
+  description = "Whether this deployment connects to Microsoft Graph (Outlook/SharePoint)."
+}
+variable "sanction_screener_enabled" {
+  type        = bool
+  description = "Whether the Sanction Screener module is deployed."
+}
+
 variable "kms_key_arn" {
   type        = string
   description = "CMK ARN used to decrypt the connector secrets."

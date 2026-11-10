@@ -149,6 +149,28 @@ export async function getIntegrationsHealth(
   }
 }
 
+// Modular architecture (Phase 2): which modules/connectors this deployment has
+// enabled. Never throws — an "everything enabled" default on any failure means
+// a transient fetch error never hides a tab/row that should be visible.
+export interface Capabilities {
+  modules: { quarterly_reports: boolean; aml_export: boolean; sanction_screener: boolean };
+  connectors: { clio: boolean; estateably: boolean; quickbooks: boolean; graph: boolean };
+}
+
+export async function fetchCapabilities(base: string, token?: string): Promise<Capabilities> {
+  const allEnabled: Capabilities = {
+    modules: { quarterly_reports: true, aml_export: true, sanction_screener: true },
+    connectors: { clio: true, estateably: true, quickbooks: true, graph: true },
+  };
+  try {
+    const res = await fetch(`${base}/capabilities`, { headers: authHeaders(token) });
+    if (!res.ok) return allEnabled;
+    return (await res.json()) as Capabilities;
+  } catch {
+    return allEnabled;
+  }
+}
+
 // -- Quarterly report drafts -------------------------------------------------
 
 export async function listReports(base: string, token?: string): Promise<ReportEntry[]> {
