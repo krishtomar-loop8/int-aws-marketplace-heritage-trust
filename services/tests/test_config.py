@@ -1,6 +1,7 @@
 import json
-import pytest
+
 from botocore.exceptions import ClientError
+
 from services.config import ConfigClient
 
 
