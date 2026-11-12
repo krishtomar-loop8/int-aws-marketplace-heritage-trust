@@ -256,7 +256,8 @@ class MatterSynthesizer:
             framework = self._framework
         else:
             framework = render_framework(
-                org_name or self._org_name, office_address or self._office_address
+                org_name if org_name is not None else self._org_name,
+                office_address if office_address is not None else self._office_address,
             )
         prompt = self._build_prompt(dossier, query)
         result = self._llm.synthesize(prompt, cache_system=framework, max_tokens=self._max_tokens)

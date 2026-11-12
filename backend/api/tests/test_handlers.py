@@ -902,6 +902,61 @@ def test_put_config_route_rejects_invalid_value(monkeypatch: pytest.MonkeyPatch)
     assert "internal_matter_number_pattern" in json.loads(resp["body"])["error"]
 
 
+def test_put_config_route_records_an_audit_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Editing own_company_names/internal_title_keywords changes who gets
+    # AML-screened, so who changed the config (and to what) must be logged.
+    from services.config import ConfigClient
+
+    deps, _ = install_deps(monkeypatch)
+    deps.config = ConfigClient(client=_FakeSsmForConfig())
+    deps.activity = FakeActivity()  # type: ignore[assignment]
+    body = {"own_company_names": ["Clark, Wilson LLP"], "org_name": None}
+    resp = handlers.handler(admin_api_event("PUT", "/config", body=body))
+    assert resp["statusCode"] == 200
+    assert len(deps.activity.records) == 1
+    entry = deps.activity.records[0]
+    assert entry["action"] == "config.update"
+    assert entry["summary"] == "Updated deployment config: org_name, own_company_names"
+    assert entry["detail"] == body
+    assert entry["actor"]["email"]
+
+
+def test_put_config_route_audit_entry_matches_the_real_record_signature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Real ActivityLog.record (not FakeActivity) so an unsupported kwarg fails.
+    from backend.api.activity import ActivityLog
+    from services.config import ConfigClient
+
+    items: list[dict] = []
+
+    class _FakeDdb:
+        def put_item(self, *, TableName, Item):
+            items.append(Item)
+
+    deps, _ = install_deps(monkeypatch)
+    deps.config = ConfigClient(client=_FakeSsmForConfig())
+    deps.activity = ActivityLog("t", client=_FakeDdb())
+    resp = handlers.handler(admin_api_event("PUT", "/config", body={"org_name": "Acme"}))
+    assert resp["statusCode"] == 200
+    assert [item["action"]["S"] for item in items] == ["config.update"]
+
+
+def test_put_config_route_rejected_update_records_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.config import ConfigClient
+
+    deps, _ = install_deps(monkeypatch)
+    deps.config = ConfigClient(client=_FakeSsmForConfig())
+    deps.activity = FakeActivity()  # type: ignore[assignment]
+    resp = handlers.handler(
+        admin_api_event("PUT", "/config", body={"internal_matter_number_pattern": "["})
+    )
+    assert resp["statusCode"] == 400
+    assert deps.activity.records == []
+
+
 # -- Per-request config resolution in the search worker ---------------------
 
 

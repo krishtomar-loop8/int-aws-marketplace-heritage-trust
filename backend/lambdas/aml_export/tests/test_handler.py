@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+import pytest
+
 from backend.lambdas.aml_export import handler as H
 from backend.lambdas.aml_export import quality
 from backend.lambdas.aml_export.handler import Deps
@@ -30,6 +32,14 @@ class _FakeSsm:
         self.params[Name] = Value
 
 
+@pytest.fixture(autouse=True)
+def _reset_quality_config():
+    # handler() configures the module-level quality config on every
+    # invocation; don't let one test's resolved config leak into the next.
+    yield
+    quality.reset_config()
+
+
 class FakeStorage:
     def __init__(self) -> None:
         self.bucket = "ht-outputs-test"
@@ -50,13 +60,14 @@ class FakeStorage:
         return set()
 
 
-def _install(monkeypatch, estateably, clio, storage):
+def _install(monkeypatch, estateably, clio, storage, config=None):
     notifications: list[tuple[dict[str, str], dict[str, Any]]] = []
     deps = Deps(
         estateably=estateably,
         clio=clio,
         storage=storage,
         notify=lambda keys, result: notifications.append((keys, result)),
+        config=config,
     )
     monkeypatch.setattr(H, "_DEPS", deps)
     return notifications
@@ -162,3 +173,22 @@ def test_org_config_from_env_prefers_configured_own_company_names(monkeypatch):
     config = ConfigClient(client=_FakeSsm())
     config.put({"own_company_names": ["Configured Co"]})
     assert H._org_config_from_env(config).own_company_names == ("Configured Co",)
+
+
+def test_warm_container_picks_up_a_config_change_between_invocations(monkeypatch):
+    # An admin runs the export, fixes own_company_names in the Deployment
+    # Config tab (served by a different container), and re-runs: the re-run
+    # on this same warm container (cached _DEPS) must use the new value.
+    ssm = _FakeSsm()
+    ConfigClient(client=ssm).put({"own_company_names": ["Unrelated Co"]})
+    es = FakeEstateably()
+    _estate_with_intake(es, "E1", "Estate of John Roe", "John", "Roe", number="200003")
+    storage = FakeStorage()
+    _install(monkeypatch, es, FakeClio(), storage, config=ConfigClient(client=ssm))
+
+    H.handler({})
+    assert [p["matter_number"] for p in storage.puts[0]["result"]["parties"]] == ["200003"]
+
+    ConfigClient(client=ssm).put({"own_company_names": ["John Roe"]})  # another container
+    H.handler({})
+    assert storage.puts[1]["result"]["parties"] == []

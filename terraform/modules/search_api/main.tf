@@ -553,6 +553,8 @@ resource "aws_apigatewayv2_route" "routes" {
     "GET /activity",
     "GET /integrations",
     "GET /capabilities",
+    "GET /config",
+    "PUT /config",
     "POST /connectors/estateably",
     "POST /connectors/graph",
     "POST /connectors/clio/authorize-url",

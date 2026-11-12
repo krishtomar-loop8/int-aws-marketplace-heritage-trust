@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { type ConfigField, fetchConfig, updateConfig } from "../api";
 import { MOCK_CONFIG } from "../mock";
 
@@ -13,9 +13,10 @@ function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : "Something went wrong.";
 }
 
-// Fields whose stored value is a list — edited/displayed as a comma-separated
-// line (no multiline input exists elsewhere in this app; a plain text input
-// keeps this screen consistent with ConnectorCard's forms).
+// Fields whose stored value is a list — edited and displayed one entry per
+// line, never comma-separated: entries can themselves contain commas (a firm
+// name like "Clark, Wilson LLP"), and splitting one into two would silently
+// change who the AML export excludes.
 const LIST_FIELDS = new Set([
   "excluded_sharepoint_folders",
   "own_company_names",
@@ -46,7 +47,7 @@ const SECTIONS: Section[] = [
       {
         name: "excluded_sharepoint_folders",
         label: "Excluded SharePoint folders",
-        hint: "Comma-separated. Folders staff shouldn't surface in matter search (e.g. HR, Finance).",
+        hint: "One per line. Folders staff shouldn't surface in matter search (e.g. HR, Finance).",
       },
     ],
   },
@@ -54,11 +55,11 @@ const SECTIONS: Section[] = [
     title: "AML Export",
     blurb: "Read by the monthly AML Name Export Lambda to recognize and exclude internal/administrative matters.",
     fields: [
-      { name: "own_company_names", label: "Own company name(s)", hint: "Comma-separated." },
+      { name: "own_company_names", label: "Own company name(s)", hint: "One per line." },
       {
         name: "internal_title_keywords",
         label: "Internal matter title keywords",
-        hint: "Comma-separated. Matter titles containing any of these are treated as internal, not a client.",
+        hint: "One per line. Matter titles containing any of these are treated as internal, not a client.",
       },
       {
         name: "internal_matter_number_pattern",
@@ -78,7 +79,7 @@ const SECTIONS: Section[] = [
       {
         name: "quarterly_qualifying_practice_areas",
         label: "Qualifying practice areas",
-        hint: "Comma-separated. Leave empty to qualify every practice area.",
+        hint: "One per line. Leave empty to qualify every practice area.",
       },
       {
         name: "quarterly_exclusion_field",
@@ -90,14 +91,14 @@ const SECTIONS: Section[] = [
   {
     title: "SharePoint",
     blurb: "Read by the SharePoint crawler Lambda to decide which sites it indexes.",
-    fields: [{ name: "sharepoint_sites", label: "SharePoint sites", hint: "Comma-separated." }],
+    fields: [{ name: "sharepoint_sites", label: "SharePoint sites", hint: "One per line." }],
   },
 ];
 
 function toEditValue(field: ConfigField | undefined, isList: boolean): string {
   if (!field) return "";
   if (isList) {
-    return Array.isArray(field.value) ? (field.value as unknown[]).map(String).join(", ") : "";
+    return Array.isArray(field.value) ? (field.value as unknown[]).map(String).join("\n") : "";
   }
   return field.value == null ? "" : String(field.value);
 }
@@ -105,7 +106,7 @@ function toEditValue(field: ConfigField | undefined, isList: boolean): string {
 function fromEditValue(raw: string, isList: boolean): unknown {
   if (!isList) return raw;
   return raw
-    .split(",")
+    .split("\n")
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 }
@@ -114,7 +115,13 @@ function displayValue(field: ConfigField | undefined, isList: boolean) {
   if (!field) return <span className="matter-sub">—</span>;
   if (isList) {
     const items = Array.isArray(field.value) ? (field.value as unknown[]).map(String) : [];
-    return items.length > 0 ? items.join(", ") : <span className="matter-sub">(none)</span>;
+    if (items.length === 0) return <span className="matter-sub">(none)</span>;
+    return items.map((item, i) => (
+      <Fragment key={i}>
+        {i > 0 && <br />}
+        {item}
+      </Fragment>
+    ));
   }
   const s = field.value == null ? "" : String(field.value);
   return s.length > 0 ? s : <span className="matter-sub">(empty)</span>;
@@ -172,7 +179,16 @@ function ConfigFieldRow({
         <div className="reports-controls">
           <label className="field field-grow">
             <span>{meta.label}</span>
-            <input value={draft} onChange={(e) => setDraft(e.target.value)} disabled={busy} />
+            {isList ? (
+              <textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                disabled={busy}
+                rows={Math.max(3, draft.split("\n").length + 1)}
+              />
+            ) : (
+              <input value={draft} onChange={(e) => setDraft(e.target.value)} disabled={busy} />
+            )}
           </label>
         </div>
       )}

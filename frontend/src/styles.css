@@ -529,7 +529,7 @@ body {
 .reports-controls { display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap; margin: 1rem 0 1.2rem; }
 .field { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.8rem; color: #45514d; }
 .field-grow { flex: 1; min-width: 220px; }
-.field select, .field input {
+.field select, .field input, .field textarea {
   font: inherit; font-size: 0.9rem; padding: 0.5rem 0.6rem;
   border: 1px solid var(--line); border-radius: var(--radius); background: #fff; color: var(--ink);
 }

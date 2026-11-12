@@ -37,7 +37,7 @@ import json
 import os
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -91,6 +91,10 @@ class Deps:
     qualifying_practice_areas: tuple[str, ...] = ()
     exclusion_field: str = ""
     letterhead: LetterheadConfig = LetterheadConfig()
+    # The deployment config store. When set, handler() re-resolves the three
+    # config-backed fields above from it on every invocation (see
+    # _with_current_config); None keeps them as constructed (test injection).
+    config: ConfigClient | None = None
 
 
 _DEPS: Deps | None = None  # cold-start cache / test injection point
@@ -122,12 +126,6 @@ def _build_deps() -> Deps:
 
     topic_arn = os.environ.get("APHRODITE_NOTIFY_TOPIC_ARN")
     sns = boto3.client("sns", region_name=REGION) if topic_arn else None
-    stored = config.get()
-    exclusion_field = (
-        stored["quarterly_exclusion_field"]
-        if "quarterly_exclusion_field" in stored
-        else os.environ.get("APHRODITE_QUARTERLY_EXCLUSION_FIELD", "").strip()
-    )
 
     def notify(
         period: ReportingPeriod,
@@ -171,9 +169,35 @@ def _build_deps() -> Deps:
         delivery=_build_delivery(secrets),
         delay_seconds=float(os.environ.get("APHRODITE_QUARTERLY_MATTER_DELAY_SECONDS", "1.2")),
         clio=clio,
-        qualifying_practice_areas=_qualifying_from_env(config),
-        exclusion_field=exclusion_field,
-        letterhead=_letterhead_from_env(config),
+        config=config,
+    )
+
+
+def _exclusion_field_from_env(config: ConfigClient | None) -> str:
+    stored = config.get() if config is not None else {}
+    if "quarterly_exclusion_field" in stored:
+        return stored["quarterly_exclusion_field"]
+    return os.environ.get("APHRODITE_QUARTERLY_EXCLUSION_FIELD", "").strip()
+
+
+def _with_current_config(deps: Deps) -> Deps:
+    """Return ``deps`` with its config-backed fields re-resolved from the store.
+
+    Called on every invocation rather than in the cached ``_build_deps()``: the
+    portal can re-run generation on a warm container right after an admin
+    saves a config change, which must apply. Returns a copy, so the cached
+    ``_DEPS`` (connectors, boto3 clients) is reused but never mutated.
+    """
+    if deps.config is None:
+        return deps
+    # One refresh (the client lives in _DEPS, so its cache would otherwise pin
+    # the first invocation's config); the three resolvers below read that.
+    deps.config.get(refresh=True)
+    return replace(
+        deps,
+        qualifying_practice_areas=_qualifying_from_env(deps.config),
+        exclusion_field=_exclusion_field_from_env(deps.config),
+        letterhead=_letterhead_from_env(deps.config),
     )
 
 
@@ -274,7 +298,7 @@ def _resolve_letter_date(event: dict[str, Any], *, today: date) -> date:
 
 def handler(event: dict[str, Any] | None = None, context: Any = None) -> dict[str, Any]:
     event = event or {}
-    deps = _get_deps()
+    deps = _with_current_config(_get_deps())
     now = datetime.now(UTC)
     today = now.date()
 

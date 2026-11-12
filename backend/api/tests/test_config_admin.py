@@ -80,3 +80,24 @@ def test_put_config_rejects_a_non_list_value_for_a_list_field():
     client = ConfigClient(client=_FakeSsm())
     with pytest.raises(ConfigValidationError, match="own_company_names"):
         put_config(client, {"own_company_names": "Acme"})
+
+
+def test_get_config_rereads_the_store_so_another_containers_write_is_visible():
+    # Two ConfigClients over one SSM store model two warm search_api
+    # containers: a write through one must show up in the other's GET /config,
+    # not the reader's stale cache.
+    ssm = _FakeSsm()
+    reader = ConfigClient(client=ssm)
+    writer = ConfigClient(client=ssm)
+    assert get_config(reader)["org_name"]["source"] == "default"  # primes reader's cache
+    put_config(writer, {"org_name": "Acme Trust"})
+    assert get_config(reader)["org_name"] == {"value": "Acme Trust", "source": "configured"}
+
+
+@pytest.mark.parametrize("name", ["org_name", "org_office_address"])
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_put_config_rejects_a_blank_org_identity_field(name, blank):
+    client = ConfigClient(client=_FakeSsm())
+    with pytest.raises(ConfigValidationError, match=f"^{name}: must not be blank$"):
+        put_config(client, {name: blank})
+    assert get_config(client)[name]["source"] == "default"

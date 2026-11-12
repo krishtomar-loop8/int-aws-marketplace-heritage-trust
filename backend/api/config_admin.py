@@ -107,6 +107,9 @@ _FIELDS: tuple[_Field, ...] = (
 
 _FIELDS_BY_NAME: dict[str, _Field] = {field.name: field for field in _FIELDS}
 
+# String fields that must not be stored blank.
+_NON_BLANK_STRING_FIELDS = frozenset({"org_name", "org_office_address"})
+
 
 def _validate(field: _Field, value: Any) -> None:
     """Raise :class:`ConfigValidationError` if ``value`` fails ``field``'s rule.
@@ -114,7 +117,9 @@ def _validate(field: _Field, value: Any) -> None:
     Mirrors the existing Terraform ``validation`` blocks word-for-word: a list
     field rejects any blank/whitespace-only entry;
     ``internal_matter_number_pattern`` must be non-empty and compile as a
-    regex. No other string field has extra validation.
+    regex. ``org_name``/``org_office_address`` must also be non-empty — the
+    search synthesizer has no meaningful blank value for either. No other
+    string field has extra validation.
     """
     if field.type_ is list:
         if not isinstance(value, list):
@@ -122,6 +127,9 @@ def _validate(field: _Field, value: Any) -> None:
         for entry in value:
             if not str(entry).strip():
                 raise ConfigValidationError(f"{field.name}: entries must not be blank")
+    elif field.name in _NON_BLANK_STRING_FIELDS:
+        if not str(value).strip():
+            raise ConfigValidationError(f"{field.name}: must not be blank")
     elif field.name == "internal_matter_number_pattern":
         if not str(value).strip():
             raise ConfigValidationError(f"{field.name}: must not be blank")
@@ -161,9 +169,12 @@ def get_config(config: ConfigClient | None) -> dict[str, dict[str, Any]]:
 
     For each of the 13 fields: if it's a key in the stored config, report its
     stored value with ``"source": "configured"``; otherwise report the env
-    var (or in-code default) with ``"source": "default"``.
+    var (or in-code default) with ``"source": "default"``. Re-reads the store
+    (``refresh=True``): a ``PUT /config`` only updates the cache of the
+    container that served it, so another warm container would otherwise
+    report its own stale copy.
     """
-    stored = config.get()
+    stored = config.get(refresh=True)
     fields: dict[str, dict[str, Any]] = {}
     for field in _FIELDS:
         if field.name in stored:

@@ -56,7 +56,9 @@ def _json_list_from_env(var_name: str, default: tuple[str, ...]) -> tuple[str, .
 
 def _org_config_from_env(config: ConfigClient | None) -> quality.OrgConfig:
     default = quality.OrgConfig()
-    stored = config.get() if config is not None else {}
+    # refresh=True: the client is cached with _DEPS for the warm container's
+    # lifetime, so its own cache would otherwise pin the first invocation's config.
+    stored = config.get(refresh=True) if config is not None else {}
     return quality.OrgConfig(
         own_company_names=tuple(str(v) for v in stored["own_company_names"])
         if "own_company_names" in stored
@@ -82,6 +84,7 @@ class Deps:
     notify: Callable[[dict[str, str], dict[str, Any]], None]
     designations_bucket: str | None = None
     designations_key: str | None = None
+    config: ConfigClient | None = None
 
 
 _DEPS: Deps | None = None  # cold-start cache / test injection point
@@ -95,7 +98,6 @@ def _build_deps() -> Deps:
     from services.secrets import SecretsClient
 
     config = ConfigClient(boto3.client("ssm", region_name=REGION))
-    quality.configure(_org_config_from_env(config))
 
     secrets = SecretsClient(boto3.client("secretsmanager", region_name=REGION))
     estateably = EstateablyConnector(secrets)
@@ -133,6 +135,7 @@ def _build_deps() -> Deps:
         notify=notify,
         designations_bucket=os.environ.get("APHRODITE_REFERENCE_BUCKET"),
         designations_key=os.environ.get("APHRODITE_AML_DESIGNATIONS_KEY"),
+        config=config,
     )
 
 
@@ -146,6 +149,9 @@ def _get_deps() -> Deps:
 def handler(event: dict[str, Any] | None = None, context: Any = None) -> dict[str, Any]:
     del event, context
     deps = _get_deps()
+    # Resolved per invocation, not in the cached _build_deps(): an on-demand
+    # re-run on a warm container must see a config change saved in between.
+    quality.configure(_org_config_from_env(deps.config))
 
     now = datetime.now(UTC)
     designations = load_designations(

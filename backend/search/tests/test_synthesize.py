@@ -116,6 +116,16 @@ def test_synthesize_override_of_one_field_keeps_the_other_constructed_value() ->
     assert llm.calls[0]["cache_system"] == render_framework("Acme Trust", "545 Clyde")
 
 
+def test_synthesize_override_honors_an_explicit_empty_value() -> None:
+    # Presence, not truthiness: a value explicitly passed (even "") is the
+    # configured value, not a cue to fall back to the constructed one.
+    llm = FakeLLM(good_reply())
+    synth = MatterSynthesizer(llm, org_name="Constructed Co", office_address="545 Clyde")
+    synth.synthesize(make_dossier(), "status?", org_name="", office_address="")
+    assert llm.calls[0]["cache_system"] == render_framework("", "")
+    assert "Constructed Co" not in llm.calls[0]["cache_system"]
+
+
 def test_synthesize_override_applies_to_the_truncation_retry_too() -> None:
     llm = SequenceLLM([("{truncated", "max_tokens"), (good_reply(), "end_turn")])
     synth = MatterSynthesizer(llm, org_name="Constructed Co", office_address="545 Clyde")

@@ -293,3 +293,44 @@ def test_letterhead_from_env_prefers_configured_value(monkeypatch):
 def test_letterhead_from_env_falls_back_when_config_client_is_none(monkeypatch):
     monkeypatch.setenv("APHRODITE_LETTERHEAD_NAME", "Env Name")
     assert H._letterhead_from_env(None).name == "Env Name"
+
+
+def test_warm_container_picks_up_a_config_change_between_invocations(monkeypatch):
+    # The portal can invoke this Lambda on demand in quick succession: a
+    # config change saved in between (by a different container) must apply to
+    # the next run on this same warm container (cached _DEPS) — practice
+    # areas, the exclusion field, and the letterhead alike.
+    ssm = _FakeSsm()
+    ConfigClient(client=ssm).put(
+        {
+            "quarterly_qualifying_practice_areas": ["Trustee"],
+            "quarterly_exclusion_field": "First Flag",
+            "letterhead_name": "First Co",
+        }
+    )
+    trustee = _matter(1, "250001", "Trustee")
+    committee = _matter(2, "250002", "Committee")
+    flagged = _matter(3, "250003", "Committee")
+    flagged["custom_field_values"] = [{"id": 5, "value": True, "field_name": "Second Flag"}]
+    clio = FakeClioList([trustee, committee, flagged])
+    gen, store = FakeGenerator(), FakeStorage()
+    _install(monkeypatch, gen, store, clio=clio, config=ConfigClient(client=ssm))
+    letterheads: list[str] = []
+    monkeypatch.setattr(
+        H, "render_cover_letter", lambda model, letterhead: letterheads.append(letterhead.name)
+    )
+    monkeypatch.setattr(H, "render_trust_ledger", lambda model: b"")
+
+    first = H.handler({"discover": True, "period": {"year": 2026, "quarter": 2}})
+    ConfigClient(client=ssm).put(  # saved via another container
+        {
+            "quarterly_qualifying_practice_areas": ["Committee"],
+            "quarterly_exclusion_field": "Second Flag",
+            "letterhead_name": "Second Co",
+        }
+    )
+    second = H.handler({"discover": True, "period": {"year": 2026, "quarter": 2}})
+
+    assert first["generated"] == ["1"]  # FakeGenerator reports the matter id
+    assert second["generated"] == ["2"]  # matter 3 excluded by the new flag field
+    assert letterheads == ["First Co", "Second Co"]

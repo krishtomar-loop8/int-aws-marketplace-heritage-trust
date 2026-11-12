@@ -684,10 +684,18 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
         forbidden = _require_admin(event)
         if forbidden:
             return forbidden
+        updates = _body(event)
         try:
-            config_admin.put_config(deps.config, _body(event))
+            config_admin.put_config(deps.config, updates)
         except config_admin.ConfigValidationError as exc:
             return _response(400, {"error": str(exc)})
+        _record(
+            deps,
+            event,
+            "config.update",
+            f"Updated deployment config: {', '.join(sorted(updates))}",
+            detail=updates,
+        )
         return _response(200, {"fields": config_admin.get_config(deps.config)})
 
     # -- Connector onboarding / reconnect (admin-gated credential writes) ---
