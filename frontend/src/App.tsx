@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { type Capabilities, fetchCapabilities } from "./api";
 import { ActivityLogPanel } from "./components/ActivityLogPanel";
 import { AmlExportPanel } from "./components/AmlExportPanel";
+import { DeploymentConfigPanel } from "./components/DeploymentConfigPanel";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { IntegrationsPanel } from "./components/IntegrationsPanel";
 import { MatterSearchChat } from "./components/MatterSearchChat";
@@ -145,6 +146,8 @@ export function App({
                   setupResult={setupResult}
                   capabilities={capabilities}
                 />
+              ) : activeTab === "deployment-config" ? (
+                <DeploymentConfigPanel apiBase={apiBase} token={token} isAdmin={isAdmin} mock={mock} />
               ) : (
                 <Placeholder tab={active} />
               )}

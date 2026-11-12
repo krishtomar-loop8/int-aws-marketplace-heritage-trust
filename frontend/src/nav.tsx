@@ -13,7 +13,8 @@ export type TabId =
   | "quarterly-reports"
   | "activity-log"
   | "sanction-screener"
-  | "integrations";
+  | "integrations"
+  | "deployment-config";
 
 export interface ModuleTab {
   id: TabId;
@@ -101,6 +102,22 @@ export const TABS: ModuleTab[] = [
     ready: true,
     // A heartbeat / pulse line — status monitoring.
     icon: icon([<path key="a" d="M3 12h4l2.5 6 4-13 2.5 7H21" />]),
+  },
+  {
+    id: "deployment-config",
+    label: "Deployment Config",
+    blurb:
+      "Organization details, letterhead, exclusion lists, and SharePoint sites used by the scheduled Lambdas and Matter Search.",
+    status: "",
+    ready: true,
+    // A gear — business configuration.
+    icon: icon([
+      <circle key="a" cx="12" cy="12" r="3" />,
+      <path
+        key="b"
+        d="M12 3v2.5M12 18.5V21M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M3 12h2.5M18.5 12H21M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"
+      />,
+    ]),
   },
 ];
 
