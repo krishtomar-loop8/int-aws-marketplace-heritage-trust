@@ -112,6 +112,19 @@ module "search_api" {
   quickbooks_enabled        = var.quickbooks_enabled
   graph_enabled             = var.graph_enabled
   sanction_screener_enabled = var.sanction_screener_enabled
+  # Deployment-config store fields (Task 6): search_api reads these on every
+  # request via the SSM-backed deployment config, same values as the other
+  # modules' own copies.
+  own_company_names                   = var.own_company_names
+  internal_title_keywords             = var.internal_title_keywords
+  internal_matter_number_pattern      = var.internal_matter_number_pattern
+  letterhead_name                     = var.letterhead_name
+  letterhead_address                  = var.letterhead_address
+  letterhead_signoff                  = var.letterhead_signoff
+  letterhead_privacy_notice           = var.letterhead_privacy_notice
+  quarterly_qualifying_practice_areas = var.quarterly_qualifying_practice_areas
+  quarterly_exclusion_field           = var.quarterly_exclusion_field
+  sharepoint_sites                    = var.sharepoint_sites
 }
 
 # Phase 2+ (D3): SharePoint document Knowledge Base — a scheduled crawler copies

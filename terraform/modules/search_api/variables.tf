@@ -194,3 +194,53 @@ variable "excluded_sharepoint_folders" {
     error_message = "excluded_sharepoint_folders entries must not be blank (a blank entry would match every folder name)."
   }
 }
+
+variable "own_company_names" {
+  type        = list(string)
+  description = "Party name(s) treated as the deployment's own company and excluded from AML screening (matched as a name prefix)."
+}
+
+variable "internal_title_keywords" {
+  type        = list(string)
+  description = "Matter title/description keywords (case-insensitive) that mark a matter as internal/administrative, excluded from AML screening."
+}
+
+variable "internal_matter_number_pattern" {
+  type        = string
+  description = "Regex matching matter numbers that are internal/administrative, excluded from AML screening."
+}
+
+variable "letterhead_name" {
+  type        = string
+  description = "Organization name shown on the quarterly-report letterhead."
+}
+
+variable "letterhead_address" {
+  type        = string
+  description = "Address line shown on the quarterly-report letterhead."
+}
+
+variable "letterhead_signoff" {
+  type        = string
+  description = "Signoff company name shown on the quarterly-report cover letter."
+}
+
+variable "letterhead_privacy_notice" {
+  type        = string
+  description = "Privacy disclosure line shown at the foot of the quarterly-report cover letter."
+}
+
+variable "quarterly_qualifying_practice_areas" {
+  type        = list(string)
+  description = "Clio practice-area names whose open matters get a quarterly statement on scheduled (discover) runs. Case-insensitive. Empty = configure per deployment."
+}
+
+variable "quarterly_exclusion_field" {
+  type        = string
+  description = "Name of a Clio checkbox custom field. Ticked = omit the matter even if it would qualify (exclusion-only); unticked/absent = practice-area rule applies. Read from Clio by name."
+}
+
+variable "sharepoint_sites" {
+  type        = list(string)
+  description = "SharePoint site URLs the crawler indexes (Sites.Selected-granted site URLs per deployment)."
+}

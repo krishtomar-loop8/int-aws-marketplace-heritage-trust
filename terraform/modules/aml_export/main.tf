@@ -83,6 +83,13 @@ data "aws_iam_policy_document" "exec" {
     actions   = ["sns:Publish"]
     resources = [aws_sns_topic.notify.arn]
   }
+  # Deployment-config store: a single SSM parameter read-only here (only
+  # search_api's admin-gated /config routes write it).
+  statement {
+    sid       = "ReadDeploymentConfig"
+    actions   = ["ssm:GetParameter"]
+    resources = ["arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/aphrodite/config/deployment"]
+  }
 }
 
 resource "aws_iam_role_policy" "exec" {
