@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
 
+from services.config import ConfigClient
 from services.logging import get_logger
 
 from .classification import load_classification
@@ -57,15 +58,22 @@ logger = get_logger(__name__)
 REGION = os.environ.get("APHRODITE_REGION", "ca-central-1")
 
 
-def _letterhead_from_env() -> LetterheadConfig:
+def _letterhead_from_env(config: ConfigClient | None) -> LetterheadConfig:
     default = LetterheadConfig()
+    stored = config.get() if config is not None else {}
     return LetterheadConfig(
-        name=os.environ.get("APHRODITE_LETTERHEAD_NAME", default.name),
-        address=os.environ.get("APHRODITE_LETTERHEAD_ADDRESS", default.address),
-        signoff=os.environ.get("APHRODITE_LETTERHEAD_SIGNOFF", default.signoff),
-        privacy_notice=os.environ.get(
-            "APHRODITE_LETTERHEAD_PRIVACY_NOTICE", default.privacy_notice
-        ),
+        name=stored["letterhead_name"]
+        if "letterhead_name" in stored
+        else os.environ.get("APHRODITE_LETTERHEAD_NAME", default.name),
+        address=stored["letterhead_address"]
+        if "letterhead_address" in stored
+        else os.environ.get("APHRODITE_LETTERHEAD_ADDRESS", default.address),
+        signoff=stored["letterhead_signoff"]
+        if "letterhead_signoff" in stored
+        else os.environ.get("APHRODITE_LETTERHEAD_SIGNOFF", default.signoff),
+        privacy_notice=stored["letterhead_privacy_notice"]
+        if "letterhead_privacy_notice" in stored
+        else os.environ.get("APHRODITE_LETTERHEAD_PRIVACY_NOTICE", default.privacy_notice),
     )
 
 
@@ -95,6 +103,7 @@ def _build_deps() -> Deps:
     from services.secrets import SecretsClient
 
     secrets = SecretsClient(boto3.client("secretsmanager", region_name=REGION))
+    config = ConfigClient(boto3.client("ssm", region_name=REGION))
     s3 = boto3.client("s3", region_name=REGION)
     # Staff-editable account-name → asset-category map from the reference bucket;
     # absent ⇒ in-code defaults (Nicole's Decision A rules). See classification.py.
@@ -113,6 +122,12 @@ def _build_deps() -> Deps:
 
     topic_arn = os.environ.get("APHRODITE_NOTIFY_TOPIC_ARN")
     sns = boto3.client("sns", region_name=REGION) if topic_arn else None
+    stored = config.get()
+    exclusion_field = (
+        stored["quarterly_exclusion_field"]
+        if "quarterly_exclusion_field" in stored
+        else os.environ.get("APHRODITE_QUARTERLY_EXCLUSION_FIELD", "").strip()
+    )
 
     def notify(
         period: ReportingPeriod,
@@ -156,15 +171,18 @@ def _build_deps() -> Deps:
         delivery=_build_delivery(secrets),
         delay_seconds=float(os.environ.get("APHRODITE_QUARTERLY_MATTER_DELAY_SECONDS", "1.2")),
         clio=clio,
-        qualifying_practice_areas=_qualifying_from_env(),
-        exclusion_field=os.environ.get("APHRODITE_QUARTERLY_EXCLUSION_FIELD", "").strip(),
-        letterhead=_letterhead_from_env(),
+        qualifying_practice_areas=_qualifying_from_env(config),
+        exclusion_field=exclusion_field,
+        letterhead=_letterhead_from_env(config),
     )
 
 
-def _qualifying_from_env() -> tuple[str, ...]:
+def _qualifying_from_env(config: ConfigClient | None) -> tuple[str, ...]:
     """Parse ``APHRODITE_QUARTERLY_QUALIFYING_PRACTICE_AREAS`` (a JSON list, or a
     comma-separated string as a fallback) into practice-area names."""
+    stored = config.get() if config is not None else {}
+    if "quarterly_qualifying_practice_areas" in stored:
+        return tuple(str(v) for v in stored["quarterly_qualifying_practice_areas"])
     raw = os.environ.get("APHRODITE_QUARTERLY_QUALIFYING_PRACTICE_AREAS", "").strip()
     if not raw:
         return ()

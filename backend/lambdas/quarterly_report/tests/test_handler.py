@@ -10,6 +10,25 @@ from backend.lambdas.quarterly_report.handler import Deps
 from backend.lambdas.quarterly_report.period import ReportingPeriod
 from backend.lambdas.quarterly_report.render_docx import LetterheadConfig
 from backend.lambdas.quarterly_report.tests.test_render import _model
+from services.config import ConfigClient
+
+
+class _FakeSsm:
+    def __init__(self):
+        self.params = {}
+
+    def get_parameter(self, *, Name):
+        from botocore.exceptions import ClientError
+
+        if Name not in self.params:
+            raise ClientError(
+                {"Error": {"Code": "ParameterNotFound", "Message": "not found"}},
+                "GetParameter",
+            )
+        return {"Parameter": {"Value": self.params[Name]}}
+
+    def put_parameter(self, *, Name, Value, Type, Overwrite):
+        self.params[Name] = Value
 
 
 class FakeGenerator:
@@ -258,6 +277,19 @@ def test_explicit_matter_ids_bypass_discovery(monkeypatch):
 def test_letterhead_from_env_partial_override(monkeypatch):
     monkeypatch.setenv("APHRODITE_LETTERHEAD_NAME", "Acme Trust")
     monkeypatch.delenv("APHRODITE_LETTERHEAD_ADDRESS", raising=False)
-    letterhead = H._letterhead_from_env()
+    letterhead = H._letterhead_from_env(None)
     assert letterhead.name == "Acme Trust"
     assert letterhead.address == LetterheadConfig().address  # untouched sibling field
+
+
+def test_letterhead_from_env_prefers_configured_value(monkeypatch):
+    monkeypatch.setenv("APHRODITE_LETTERHEAD_NAME", "Env Name")
+    config = ConfigClient(client=_FakeSsm())
+    config.put({"letterhead_name": "Configured Name"})
+    letterhead = H._letterhead_from_env(config)
+    assert letterhead.name == "Configured Name"
+
+
+def test_letterhead_from_env_falls_back_when_config_client_is_none(monkeypatch):
+    monkeypatch.setenv("APHRODITE_LETTERHEAD_NAME", "Env Name")
+    assert H._letterhead_from_env(None).name == "Env Name"

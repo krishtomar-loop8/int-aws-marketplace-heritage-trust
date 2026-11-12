@@ -9,6 +9,25 @@ from backend.lambdas.aml_export import handler as H
 from backend.lambdas.aml_export import quality
 from backend.lambdas.aml_export.handler import Deps
 from backend.lambdas.aml_export.tests.test_export import FakeClio, FakeEstateably, _resource
+from services.config import ConfigClient
+
+
+class _FakeSsm:
+    def __init__(self):
+        self.params = {}
+
+    def get_parameter(self, *, Name):
+        from botocore.exceptions import ClientError
+
+        if Name not in self.params:
+            raise ClientError(
+                {"Error": {"Code": "ParameterNotFound", "Message": "not found"}},
+                "GetParameter",
+            )
+        return {"Parameter": {"Value": self.params[Name]}}
+
+    def put_parameter(self, *, Name, Value, Type, Overwrite):
+        self.params[Name] = Value
 
 
 class FakeStorage:
@@ -111,7 +130,7 @@ def test_handler_ignores_event_payload(monkeypatch):
 def test_org_config_from_env_malformed_json_falls_back(monkeypatch):
     monkeypatch.setenv("APHRODITE_OWN_COMPANY_NAMES", "{not valid json")
     monkeypatch.setenv("APHRODITE_INTERNAL_TITLE_KEYWORDS", "{not valid json")
-    config = H._org_config_from_env()
+    config = H._org_config_from_env(None)
     assert config.own_company_names == quality.OrgConfig().own_company_names
     assert config.internal_title_keywords == quality.OrgConfig().internal_title_keywords
 
@@ -119,7 +138,7 @@ def test_org_config_from_env_malformed_json_falls_back(monkeypatch):
 def test_org_config_from_env_applies_overrides(monkeypatch):
     monkeypatch.setenv("APHRODITE_OWN_COMPANY_NAMES", '["Acme Trust"]')
     monkeypatch.setenv("APHRODITE_INTERNAL_MATTER_NUMBER_PATTERN", r"^\s*9999-\d+")
-    config = H._org_config_from_env()
+    config = H._org_config_from_env(None)
     assert config.own_company_names == ("Acme Trust",)
     assert config.internal_number_pattern == r"^\s*9999-\d+"
     # Untouched field keeps its own default.
@@ -128,11 +147,18 @@ def test_org_config_from_env_applies_overrides(monkeypatch):
 
 def test_org_config_from_env_empty_list_excludes_nothing(monkeypatch):
     monkeypatch.setenv("APHRODITE_OWN_COMPANY_NAMES", "[]")
-    config = H._org_config_from_env()
+    config = H._org_config_from_env(None)
     assert config.own_company_names == ()
 
 
 def test_org_config_from_env_blank_keyword_entries_filtered(monkeypatch):
     monkeypatch.setenv("APHRODITE_INTERNAL_TITLE_KEYWORDS", '["suspense", "  ", ""]')
-    config = H._org_config_from_env()
+    config = H._org_config_from_env(None)
     assert config.internal_title_keywords == ("suspense",)
+
+
+def test_org_config_from_env_prefers_configured_own_company_names(monkeypatch):
+    monkeypatch.setenv("APHRODITE_OWN_COMPANY_NAMES", '["Env Co"]')
+    config = ConfigClient(client=_FakeSsm())
+    config.put({"own_company_names": ["Configured Co"]})
+    assert H._org_config_from_env(config).own_company_names == ("Configured Co",)
