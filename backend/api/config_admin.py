@@ -12,6 +12,7 @@ API Gateway event.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from dataclasses import dataclass
@@ -116,6 +117,8 @@ def _validate(field: _Field, value: Any) -> None:
     regex. No other string field has extra validation.
     """
     if field.type_ is list:
+        if not isinstance(value, list):
+            raise ConfigValidationError(f"{field.name}: must be a list")
         for entry in value:
             if not str(entry).strip():
                 raise ConfigValidationError(f"{field.name}: entries must not be blank")
@@ -126,6 +129,31 @@ def _validate(field: _Field, value: Any) -> None:
             re.compile(value)
         except re.error as exc:
             raise ConfigValidationError(f"{field.name}: not a valid regex ({exc})") from exc
+
+
+def _env_default(field: _Field) -> Any:
+    """Resolve ``field``'s "default" value: the Terraform-set env var if
+    present, else its in-code default.
+
+    A list-typed field's env var is JSON-encoded (Terraform's ``jsonencode``),
+    matching every existing consumer's own parsing
+    (``handlers.py::_excluded_folders_from_env``,
+    ``aml_export/handler.py::_json_list_from_env``,
+    ``quarterly_report/handler.py::_qualifying_from_env``) — so it must be
+    ``json.loads``-ed here too, falling back to the in-code default (same
+    defensive style as those parsers) if the env var is unset, unparsable, or
+    doesn't decode to a list.
+    """
+    raw = os.environ.get(field.env_var)
+    if raw is None:
+        return field.default
+    if field.type_ is not list:
+        return raw
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return field.default
+    return parsed if isinstance(parsed, list) else field.default
 
 
 def get_config(config: ConfigClient | None) -> dict[str, dict[str, Any]]:
@@ -141,10 +169,7 @@ def get_config(config: ConfigClient | None) -> dict[str, dict[str, Any]]:
         if field.name in stored:
             fields[field.name] = {"value": stored[field.name], "source": "configured"}
         else:
-            fields[field.name] = {
-                "value": os.environ.get(field.env_var, field.default),
-                "source": "default",
-            }
+            fields[field.name] = {"value": _env_default(field), "source": "default"}
     return fields
 
 

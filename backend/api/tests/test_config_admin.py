@@ -62,3 +62,21 @@ def test_put_config_null_clears_a_field_back_to_default(monkeypatch):
     put_config(client, {"org_name": "Acme Trust"})
     put_config(client, {"org_name": None})
     assert get_config(client)["org_name"] == {"value": "Heritage Trust", "source": "default"}
+
+
+def test_get_config_parses_a_json_encoded_list_env_var(monkeypatch):
+    monkeypatch.setenv(
+        "APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS", '["hr", "human resources", "finance"]'
+    )
+    client = ConfigClient(client=_FakeSsm())
+    field = get_config(client)["excluded_sharepoint_folders"]
+    assert field == {
+        "value": ["hr", "human resources", "finance"],
+        "source": "default",
+    }
+
+
+def test_put_config_rejects_a_non_list_value_for_a_list_field():
+    client = ConfigClient(client=_FakeSsm())
+    with pytest.raises(ConfigValidationError, match="own_company_names"):
+        put_config(client, {"own_company_names": "Acme"})
