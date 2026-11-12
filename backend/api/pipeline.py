@@ -124,8 +124,15 @@ def run_search(
     on_phase: Callable[[str], None] | None = None,
     activity: ActivityLog | None = None,
     remaining_ms: Callable[[], float] | None = None,
+    org_name: str | None = None,
+    office_address: str | None = None,
+    excluded_sharepoint_folders: frozenset[str] | None = None,
 ) -> dict[str, Any]:
     """Resolve → (dossier → synthesis) for an unambiguous match.
+
+    ``org_name`` / ``office_address`` / ``excluded_sharepoint_folders`` are
+    per-request deployment-config overrides passed through to the synthesizer and
+    dossier builder; ``None`` keeps the values they were constructed with.
 
     When ``selection`` is supplied (the user picked a candidate from a prior
     disambiguation), it names the matter directly and resolution is skipped.
@@ -231,11 +238,21 @@ def run_search(
 
     phase("Reading Estateably, Clio and Outlook")
     t_build = time.perf_counter()
-    dossier = dossier_builder.build(candidate, correspondence_term=term)
+    dossier = dossier_builder.build(
+        candidate,
+        correspondence_term=term,
+        excluded_sharepoint_folders=excluded_sharepoint_folders,
+    )
     build_ms = round((time.perf_counter() - t_build) * 1000, 1)
     phase("Drafting the source-cited summary")
     t_synth = time.perf_counter()
-    synthesis = synthesizer.synthesize(dossier, query, remaining_ms=remaining_ms)
+    synthesis = synthesizer.synthesize(
+        dossier,
+        query,
+        remaining_ms=remaining_ms,
+        org_name=org_name,
+        office_address=office_address,
+    )
     synth_ms = round((time.perf_counter() - t_synth) * 1000, 1)
 
     # Per-search cost from real token usage (None when the model is unpriced).

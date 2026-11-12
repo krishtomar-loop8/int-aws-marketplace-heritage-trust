@@ -72,6 +72,33 @@ def _excluded_folders_from_env() -> frozenset[str]:
     return frozenset(str(v).strip().lower() for v in parsed if str(v).strip())
 
 
+def _search_config_overrides(config: ConfigClient | None) -> dict[str, Any]:
+    """Resolve search's three deployment-config values fresh for one request.
+
+    A key present in the stored config wins (checked with ``in``, so a stored
+    empty exclusion list means "exclude nothing"); otherwise the env var/default
+    applies, exactly as at cold start. SSM is re-read (``refresh=True``) on every
+    call: a ``PUT /config`` lands on whichever container served it, so this
+    worker's cached copy would otherwise stay stale for the container's lifetime.
+    """
+    stored = config.get(refresh=True) if config is not None else {}
+    if "excluded_sharepoint_folders" in stored:
+        excluded = frozenset(
+            str(v).strip().lower() for v in stored["excluded_sharepoint_folders"] if str(v).strip()
+        )
+    else:
+        excluded = _excluded_folders_from_env()
+    return {
+        "org_name": stored["org_name"]
+        if "org_name" in stored
+        else os.environ.get("APHRODITE_ORG_NAME", DEFAULT_ORG_NAME),
+        "office_address": stored["org_office_address"]
+        if "org_office_address" in stored
+        else os.environ.get("APHRODITE_ORG_OFFICE_ADDRESS", DEFAULT_ORG_OFFICE_ADDRESS),
+        "excluded_sharepoint_folders": excluded,
+    }
+
+
 @dataclass
 class Deps:
     resolver: MatterResolver
@@ -804,6 +831,9 @@ def _run_worker(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
             logger.warning("progress write failed", extra={"extra_fields": {"job_id": job_id}})
 
     try:
+        # Inside the try: a config read failure fails this job visibly rather than
+        # silently searching with a possibly-stale exclusion list.
+        overrides = _search_config_overrides(deps.config)
         result = run_search(
             query,
             resolver=deps.resolver,
@@ -817,6 +847,7 @@ def _run_worker(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
             on_phase=on_phase,
             activity=deps.activity,
             remaining_ms=remaining_ms,
+            **overrides,
         )
         deps.store.complete(job_id, result)
         return {"ok": True, "job_id": job_id}

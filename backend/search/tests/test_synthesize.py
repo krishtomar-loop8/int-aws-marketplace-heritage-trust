@@ -101,6 +101,45 @@ def test_synthesizer_uses_custom_org_config() -> None:
     assert "Aphrodite" not in llm.calls[0]["cache_system"]
 
 
+def test_synthesize_override_replaces_the_constructed_framework() -> None:
+    llm = FakeLLM(good_reply())
+    synth = MatterSynthesizer(llm, org_name="Constructed Co", office_address="545 Clyde")
+    synth.synthesize(make_dossier(), "status?", org_name="Acme Trust", office_address="1 Main St")
+    assert llm.calls[0]["cache_system"] == render_framework("Acme Trust", "1 Main St")
+    assert "Constructed Co" not in llm.calls[0]["cache_system"]
+
+
+def test_synthesize_override_of_one_field_keeps_the_other_constructed_value() -> None:
+    llm = FakeLLM(good_reply())
+    synth = MatterSynthesizer(llm, org_name="Constructed Co", office_address="545 Clyde")
+    synth.synthesize(make_dossier(), "status?", org_name="Acme Trust")
+    assert llm.calls[0]["cache_system"] == render_framework("Acme Trust", "545 Clyde")
+
+
+def test_synthesize_override_applies_to_the_truncation_retry_too() -> None:
+    llm = SequenceLLM([("{truncated", "max_tokens"), (good_reply(), "end_turn")])
+    synth = MatterSynthesizer(llm, org_name="Constructed Co", office_address="545 Clyde")
+    synth.synthesize(make_dossier(), "status?", org_name="Acme Trust", office_address="1 Main St")
+    assert len(llm.calls) == 2
+    expected = render_framework("Acme Trust", "1 Main St")
+    assert [c["cache_system"] for c in llm.calls] == [expected, expected]
+
+
+def test_synthesize_override_does_not_stick_to_the_next_call() -> None:
+    llm = FakeLLM(good_reply())
+    synth = MatterSynthesizer(llm, org_name="Constructed Co", office_address="545 Clyde")
+    synth.synthesize(make_dossier(), "status?", org_name="Acme Trust", office_address="1 Main St")
+    synth.synthesize(make_dossier(), "status?")
+    assert llm.calls[1]["cache_system"] == render_framework("Constructed Co", "545 Clyde")
+
+
+def test_synthesize_without_override_uses_the_constructed_framework() -> None:
+    llm = FakeLLM(good_reply())
+    synth = MatterSynthesizer(llm, org_name="Constructed Co", office_address="545 Clyde")
+    synth.synthesize(make_dossier(), "status?")
+    assert llm.calls[0]["cache_system"] == render_framework("Constructed Co", "545 Clyde")
+
+
 def test_framework_carries_the_fidelity_and_tax_rules() -> None:
     # Canaries for the feedback-round-2 hardening: these rules were added after
     # real client-reported failures — an accidental edit that drops one should
