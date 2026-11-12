@@ -12,6 +12,24 @@ from backend.api.jobs import InMemoryJobStore
 from backend.search import scoping
 
 
+class _FakeSsmForConfig:
+    def __init__(self):
+        self.params = {}
+
+    def get_parameter(self, *, Name):
+        from botocore.exceptions import ClientError
+
+        if Name not in self.params:
+            raise ClientError(
+                {"Error": {"Code": "ParameterNotFound", "Message": "not found"}},
+                "GetParameter",
+            )
+        return {"Parameter": {"Value": self.params[Name]}}
+
+    def put_parameter(self, *, Name, Value, Type, Overwrite):
+        self.params[Name] = Value
+
+
 class FakeResolver:
     def __init__(self, result: Any) -> None:
         self._result = result
@@ -834,3 +852,51 @@ def test_quickbooks_callback_route_redirects_without_admin_header(
     resp = handlers.handler(event)
     assert resp["statusCode"] == 302
     assert resp["headers"]["Location"] == "https://app.example/?setup=quickbooks-connected"
+
+
+# -- Deployment config (GET/PUT /config) -------------------------------------
+
+
+def test_get_config_route_returns_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    from services.config import ConfigClient
+
+    deps, _ = install_deps(monkeypatch)
+    deps.config = ConfigClient(client=_FakeSsmForConfig())
+    resp = handlers.handler(api_event("GET", "/config"))
+    assert resp["statusCode"] == 200
+    assert "org_name" in json.loads(resp["body"])["fields"]
+
+
+def test_put_config_route_requires_admin(monkeypatch: pytest.MonkeyPatch) -> None:
+    from services.config import ConfigClient
+
+    deps, _ = install_deps(monkeypatch)
+    deps.config = ConfigClient(client=_FakeSsmForConfig())
+    resp = handlers.handler(api_event("PUT", "/config", body={"org_name": "Acme Trust"}))
+    assert resp["statusCode"] == 403
+
+
+def test_put_config_route_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    from services.config import ConfigClient
+
+    deps, _ = install_deps(monkeypatch)
+    deps.config = ConfigClient(client=_FakeSsmForConfig())
+    resp = handlers.handler(
+        admin_api_event("PUT", "/config", body={"org_name": "Acme Trust"})
+    )
+    assert resp["statusCode"] == 200
+    assert deps.config.get(refresh=True)["org_name"] == "Acme Trust"
+
+
+def test_put_config_route_rejects_invalid_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    from services.config import ConfigClient
+
+    deps, _ = install_deps(monkeypatch)
+    deps.config = ConfigClient(client=_FakeSsmForConfig())
+    resp = handlers.handler(
+        admin_api_event(
+            "PUT", "/config", body={"internal_matter_number_pattern": "["}
+        )
+    )
+    assert resp["statusCode"] == 400
+    assert "internal_matter_number_pattern" in json.loads(resp["body"])["error"]

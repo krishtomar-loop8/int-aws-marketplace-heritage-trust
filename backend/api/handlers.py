@@ -24,7 +24,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from backend.api import connectors_admin
+from backend.api import config_admin, connectors_admin
 from backend.api.activity import ActivityLog
 from backend.api.aml_admin import AmlExportTrigger, AmlScheduleService, ScheduleError
 from backend.api.aml_reports import AmlExportAccessError, AmlExportsService
@@ -40,6 +40,7 @@ from backend.search.orchestrator import DossierBuilder
 from backend.search.quick_answers import QuickAnswerService
 from backend.search.resolve import MatterResolver
 from backend.search.synthesize import MatterSynthesizer
+from services.config import ConfigClient
 from services.logging import get_logger
 from services.secrets import SecretsClient
 
@@ -90,6 +91,7 @@ class Deps:
     integrations: IntegrationHealthStore | None = None
     secrets: SecretsClient | None = None
     connectors_enabled: frozenset[str] = frozenset({"clio", "estateably", "quickbooks", "graph"})
+    config: ConfigClient | None = None
 
 
 _DEPS: Deps | None = None  # cold-start cache / test injection point
@@ -128,6 +130,7 @@ def _build_deps(*, model_id: str | None = None) -> Deps:
     )
 
     secrets = SecretsClient(boto3.client("secretsmanager", region_name=REGION))
+    config = ConfigClient(boto3.client("ssm", region_name=REGION))
     estateably = EstateablyConnector(secrets) if "estateably" in connectors_enabled else None
     clio = ClioConnector(secrets) if "clio" in connectors_enabled else None
     graph = GraphConnector(secrets) if "graph" in connectors_enabled else None
@@ -272,6 +275,7 @@ def _build_deps(*, model_id: str | None = None) -> Deps:
         integrations,
         secrets=secrets,
         connectors_enabled=connectors_enabled,
+        config=config,
     )
 
 
@@ -643,6 +647,21 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
             "sanction_screener": deps.screener is not None,
         }
         return _response(200, {"modules": modules, "connectors": connectors})
+
+    # -- Deployment config (business-config tab; GET is visible to everyone,
+    # only PUT is admin-gated) -----------------------------------------------
+    if method == "GET" and path.endswith("/config"):
+        return _response(200, {"fields": config_admin.get_config(deps.config)})
+
+    if method == "PUT" and path.endswith("/config"):
+        forbidden = _require_admin(event)
+        if forbidden:
+            return forbidden
+        try:
+            config_admin.put_config(deps.config, _body(event))
+        except config_admin.ConfigValidationError as exc:
+            return _response(400, {"error": str(exc)})
+        return _response(200, {"fields": config_admin.get_config(deps.config)})
 
     # -- Connector onboarding / reconnect (admin-gated credential writes) ---
     if method == "POST" and path.endswith("/connectors/estateably"):
