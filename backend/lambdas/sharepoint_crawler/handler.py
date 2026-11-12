@@ -30,6 +30,7 @@ from typing import Any
 from backend.lambdas.sharepoint_crawler.crawl import SharePointCrawler
 from backend.lambdas.sharepoint_crawler.storage import S3CrawlStorage
 from backend.search import scoping
+from services.config import ConfigClient
 from services.logging import get_logger
 
 logger = get_logger(__name__)
@@ -41,7 +42,7 @@ _DEADLINE_SAFETY_SECONDS = 90.0
 _MAX_CONTINUES = 200
 
 
-def _excluded_folders_from_env() -> frozenset[str]:
+def _excluded_folders_from_env(config: ConfigClient | None) -> frozenset[str]:
     """Parse ``APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS`` (a JSON list, or a
     comma-separated string as a fallback) into excluded folder names — the
     same env var and parsing rules the search API uses, so crawl-time
@@ -51,6 +52,11 @@ def _excluded_folders_from_env() -> frozenset[str]:
     explicit empty list (``"[]"``) is honored as "exclude nothing" rather
     than falling back to the default; blank/whitespace-only entries are
     dropped so they can't accidentally match every folder."""
+    stored = config.get() if config is not None else {}
+    if "excluded_sharepoint_folders" in stored:
+        return frozenset(
+            str(v).strip().lower() for v in stored["excluded_sharepoint_folders"] if str(v).strip()
+        )
     raw = os.environ.get("APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS", "").strip()
     if not raw:
         return scoping.DEFAULT_EXCLUDED_FOLDERS
@@ -63,6 +69,16 @@ def _excluded_folders_from_env() -> frozenset[str]:
     return frozenset(str(v).strip().lower() for v in parsed if str(v).strip())
 
 
+def _sharepoint_sites_from_env(config: ConfigClient | None) -> list[str]:
+    """Resolve the configured SharePoint site URLs: the stored config's
+    ``sharepoint_sites`` wins if present, else ``APHRODITE_SHAREPOINT_SITES``
+    (a JSON list, unchanged from the prior inline behavior)."""
+    stored = config.get() if config is not None else {}
+    if "sharepoint_sites" in stored:
+        return list(stored["sharepoint_sites"])
+    return json.loads(os.environ.get("APHRODITE_SHAREPOINT_SITES", "[]"))
+
+
 def handler(event: dict[str, Any] | None = None, context: Any = None) -> dict[str, Any]:
     import boto3
 
@@ -70,7 +86,8 @@ def handler(event: dict[str, Any] | None = None, context: Any = None) -> dict[st
     from services.secrets import SecretsClient
 
     event = event or {}
-    sites = json.loads(os.environ.get("APHRODITE_SHAREPOINT_SITES", "[]"))
+    config = ConfigClient(boto3.client("ssm", region_name=REGION))
+    sites = _sharepoint_sites_from_env(config)
     bucket = os.environ["APHRODITE_CRAWL_BUCKET"]
     if not sites:
         logger.info("no SharePoint sites configured; nothing to crawl")
@@ -84,7 +101,7 @@ def handler(event: dict[str, Any] | None = None, context: Any = None) -> dict[st
         kms_key_id=os.environ.get("APHRODITE_CRAWL_KMS_KEY_ID"),
     )
     crawler = SharePointCrawler(
-        graph=graph, storage=storage, sites=sites, exclude=_excluded_folders_from_env()
+        graph=graph, storage=storage, sites=sites, exclude=_excluded_folders_from_env(config)
     )
 
     stats = crawler.crawl(deadline=_deadline_from(context))

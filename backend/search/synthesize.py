@@ -236,6 +236,8 @@ class MatterSynthesizer:
     ) -> None:
         self._llm = llm
         self._max_tokens = max_tokens
+        self._org_name = org_name
+        self._office_address = office_address
         self._framework = render_framework(org_name, office_address)
 
     def synthesize(
@@ -244,11 +246,21 @@ class MatterSynthesizer:
         query: str,
         *,
         remaining_ms: Callable[[], float] | None = None,
+        org_name: str | None = None,
+        office_address: str | None = None,
     ) -> SynthesisResult:
+        # Per-call org overrides (search_api resolves them from the deployment config
+        # on every request, so a saved change applies without a cold start). Neither
+        # given ⇒ the framework built at construction, unchanged.
+        if org_name is None and office_address is None:
+            framework = self._framework
+        else:
+            framework = render_framework(
+                org_name if org_name is not None else self._org_name,
+                office_address if office_address is not None else self._office_address,
+            )
         prompt = self._build_prompt(dossier, query)
-        result = self._llm.synthesize(
-            prompt, cache_system=self._framework, max_tokens=self._max_tokens
-        )
+        result = self._llm.synthesize(prompt, cache_system=framework, max_tokens=self._max_tokens)
         parsed, parse_ok = _parse_json(result.text)
 
         # Large, record-heavy matters can overrun the output budget: the JSON is
@@ -272,9 +284,7 @@ class MatterSynthesizer:
                     }
                 },
             )
-            result = self._llm.synthesize(
-                prompt, cache_system=self._framework, max_tokens=retry_tokens
-            )
+            result = self._llm.synthesize(prompt, cache_system=framework, max_tokens=retry_tokens)
             parsed, parse_ok = _parse_json(result.text)
             retried = True
         elif wants_retry and not have_budget:

@@ -10,6 +10,25 @@ from backend.lambdas.quarterly_report.handler import Deps
 from backend.lambdas.quarterly_report.period import ReportingPeriod
 from backend.lambdas.quarterly_report.render_docx import LetterheadConfig
 from backend.lambdas.quarterly_report.tests.test_render import _model
+from services.config import ConfigClient
+
+
+class _FakeSsm:
+    def __init__(self):
+        self.params = {}
+
+    def get_parameter(self, *, Name):
+        from botocore.exceptions import ClientError
+
+        if Name not in self.params:
+            raise ClientError(
+                {"Error": {"Code": "ParameterNotFound", "Message": "not found"}},
+                "GetParameter",
+            )
+        return {"Parameter": {"Value": self.params[Name]}}
+
+    def put_parameter(self, *, Name, Value, Type, Overwrite):
+        self.params[Name] = Value
 
 
 class FakeGenerator:
@@ -258,6 +277,60 @@ def test_explicit_matter_ids_bypass_discovery(monkeypatch):
 def test_letterhead_from_env_partial_override(monkeypatch):
     monkeypatch.setenv("APHRODITE_LETTERHEAD_NAME", "Acme Trust")
     monkeypatch.delenv("APHRODITE_LETTERHEAD_ADDRESS", raising=False)
-    letterhead = H._letterhead_from_env()
+    letterhead = H._letterhead_from_env(None)
     assert letterhead.name == "Acme Trust"
     assert letterhead.address == LetterheadConfig().address  # untouched sibling field
+
+
+def test_letterhead_from_env_prefers_configured_value(monkeypatch):
+    monkeypatch.setenv("APHRODITE_LETTERHEAD_NAME", "Env Name")
+    config = ConfigClient(client=_FakeSsm())
+    config.put({"letterhead_name": "Configured Name"})
+    letterhead = H._letterhead_from_env(config)
+    assert letterhead.name == "Configured Name"
+
+
+def test_letterhead_from_env_falls_back_when_config_client_is_none(monkeypatch):
+    monkeypatch.setenv("APHRODITE_LETTERHEAD_NAME", "Env Name")
+    assert H._letterhead_from_env(None).name == "Env Name"
+
+
+def test_warm_container_picks_up_a_config_change_between_invocations(monkeypatch):
+    # The portal can invoke this Lambda on demand in quick succession: a
+    # config change saved in between (by a different container) must apply to
+    # the next run on this same warm container (cached _DEPS) — practice
+    # areas, the exclusion field, and the letterhead alike.
+    ssm = _FakeSsm()
+    ConfigClient(client=ssm).put(
+        {
+            "quarterly_qualifying_practice_areas": ["Trustee"],
+            "quarterly_exclusion_field": "First Flag",
+            "letterhead_name": "First Co",
+        }
+    )
+    trustee = _matter(1, "250001", "Trustee")
+    committee = _matter(2, "250002", "Committee")
+    flagged = _matter(3, "250003", "Committee")
+    flagged["custom_field_values"] = [{"id": 5, "value": True, "field_name": "Second Flag"}]
+    clio = FakeClioList([trustee, committee, flagged])
+    gen, store = FakeGenerator(), FakeStorage()
+    _install(monkeypatch, gen, store, clio=clio, config=ConfigClient(client=ssm))
+    letterheads: list[str] = []
+    monkeypatch.setattr(
+        H, "render_cover_letter", lambda model, letterhead: letterheads.append(letterhead.name)
+    )
+    monkeypatch.setattr(H, "render_trust_ledger", lambda model: b"")
+
+    first = H.handler({"discover": True, "period": {"year": 2026, "quarter": 2}})
+    ConfigClient(client=ssm).put(  # saved via another container
+        {
+            "quarterly_qualifying_practice_areas": ["Committee"],
+            "quarterly_exclusion_field": "Second Flag",
+            "letterhead_name": "Second Co",
+        }
+    )
+    second = H.handler({"discover": True, "period": {"year": 2026, "quarter": 2}})
+
+    assert first["generated"] == ["1"]  # FakeGenerator reports the matter id
+    assert second["generated"] == ["2"]  # matter 3 excluded by the new flag field
+    assert letterheads == ["First Co", "Second Co"]

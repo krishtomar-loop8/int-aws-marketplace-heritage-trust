@@ -361,6 +361,19 @@ data "aws_iam_policy_document" "search" {
       }
     }
   }
+  # Deployment-config store: a single SSM parameter the API reads on every
+  # request and the admin-gated GET/PUT /config routes write. Always granted —
+  # unlike the per-connector toggles above, the config store always exists.
+  statement {
+    sid       = "ReadDeploymentConfig"
+    actions   = ["ssm:GetParameter"]
+    resources = ["arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/aphrodite/config/deployment"]
+  }
+  statement {
+    sid       = "WriteDeploymentConfig"
+    actions   = ["ssm:PutParameter"]
+    resources = ["arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/aphrodite/config/deployment"]
+  }
 }
 
 resource "aws_iam_role_policy" "search" {
@@ -420,6 +433,17 @@ resource "aws_lambda_function" "search" {
       APHRODITE_QUICKBOOKS_ENABLED           = var.quickbooks_enabled
       APHRODITE_GRAPH_ENABLED                = var.graph_enabled
       APHRODITE_SANCTION_SCREENER_ENABLED    = var.sanction_screener_enabled
+      # Deployment-config store fields surfaced to search_api (Task 6).
+      APHRODITE_OWN_COMPANY_NAMES                   = jsonencode(var.own_company_names)
+      APHRODITE_INTERNAL_TITLE_KEYWORDS             = jsonencode(var.internal_title_keywords)
+      APHRODITE_INTERNAL_MATTER_NUMBER_PATTERN      = var.internal_matter_number_pattern
+      APHRODITE_LETTERHEAD_NAME                     = var.letterhead_name
+      APHRODITE_LETTERHEAD_ADDRESS                  = var.letterhead_address
+      APHRODITE_LETTERHEAD_SIGNOFF                  = var.letterhead_signoff
+      APHRODITE_LETTERHEAD_PRIVACY_NOTICE           = var.letterhead_privacy_notice
+      APHRODITE_QUARTERLY_QUALIFYING_PRACTICE_AREAS = jsonencode(var.quarterly_qualifying_practice_areas)
+      APHRODITE_QUARTERLY_EXCLUSION_FIELD           = var.quarterly_exclusion_field
+      APHRODITE_SHAREPOINT_SITES                    = jsonencode(var.sharepoint_sites)
     }
   }
 
@@ -529,6 +553,8 @@ resource "aws_apigatewayv2_route" "routes" {
     "GET /activity",
     "GET /integrations",
     "GET /capabilities",
+    "GET /config",
+    "PUT /config",
     "POST /connectors/estateably",
     "POST /connectors/graph",
     "POST /connectors/clio/authorize-url",

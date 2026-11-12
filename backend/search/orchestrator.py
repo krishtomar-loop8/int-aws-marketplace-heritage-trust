@@ -927,8 +927,14 @@ class DossierBuilder:
         self._max_workers = max_workers
 
     def build(
-        self, candidate: MatterCandidate, *, correspondence_term: str | None = None
+        self,
+        candidate: MatterCandidate,
+        *,
+        correspondence_term: str | None = None,
+        excluded_sharepoint_folders: frozenset[str] | None = None,
     ) -> MatterDossier:
+        # ``excluded_sharepoint_folders`` is a per-call override (search_api resolves it
+        # from the deployment config on every request); None ⇒ the constructed set.
         ref_ids = _best_ref_ids(candidate, correspondence_term)
         dossier = MatterDossier(
             matter_name=_matter_title(candidate, ref_ids),
@@ -985,7 +991,10 @@ class DossierBuilder:
                     (
                         "sharepoint",
                         lambda: self._collect_sharepoint(
-                            correspondence_term, sp_numbers, sp_tokens
+                            correspondence_term,
+                            sp_numbers,
+                            sp_tokens,
+                            exclude=excluded_sharepoint_folders,
                         ),
                     )
                 )
@@ -1709,6 +1718,8 @@ class DossierBuilder:
         term: str,
         matter_numbers: frozenset[str] = frozenset(),
         tokens: frozenset[str] = frozenset(),
+        *,
+        exclude: frozenset[str] | None = None,
     ) -> _Slice:
         """Retrieve the matter's SharePoint documents from the Bedrock Knowledge Base.
 
@@ -1729,6 +1740,8 @@ class DossierBuilder:
         sl = _Slice()
         kb = self._knowledge_base
         lim = self._limits
+        if exclude is None:  # no per-call override; an empty set is honored as-is
+            exclude = self._excluded_sharepoint_folders
         try:
             hits = kb.retrieve(term, top_k=lim.sharepoint_docs)
         except Exception as exc:  # noqa: BLE001 - a KB failure must not sink the dossier
@@ -1742,9 +1755,7 @@ class DossierBuilder:
             web_url = r.web_url
             # Crawl-time exclusion is primary; re-check the path here in case any
             # HR/Finance document was indexed before the filter applied.
-            if web_url and is_excluded(
-                {"webUrl": web_url}, exclude=self._excluded_sharepoint_folders
-            ):
+            if web_url and is_excluded({"webUrl": web_url}, exclude=exclude):
                 excluded += 1
                 continue
             name = r.name or (web_url or r.uri or "document").rstrip("/").rsplit("/", 1)[-1]

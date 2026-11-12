@@ -7,6 +7,25 @@ from typing import Any
 
 from backend.lambdas.sharepoint_crawler import handler as h
 from backend.search import scoping
+from services.config import ConfigClient
+
+
+class _FakeSsm:
+    def __init__(self):
+        self.params = {}
+
+    def get_parameter(self, *, Name):
+        from botocore.exceptions import ClientError
+
+        if Name not in self.params:
+            raise ClientError(
+                {"Error": {"Code": "ParameterNotFound", "Message": "not found"}},
+                "GetParameter",
+            )
+        return {"Parameter": {"Value": self.params[Name]}}
+
+    def put_parameter(self, *, Name, Value, Type, Overwrite):
+        self.params[Name] = Value
 
 
 def test_deadline_from_context_leaves_safety_margin() -> None:
@@ -71,24 +90,42 @@ def test_self_continue_respects_cap(monkeypatch) -> None:
 
 def test_excluded_folders_from_env_applies_override(monkeypatch) -> None:
     monkeypatch.setenv("APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS", '["payroll"]')
-    assert h._excluded_folders_from_env() == frozenset({"payroll"})
+    assert h._excluded_folders_from_env(None) == frozenset({"payroll"})
 
 
 def test_excluded_folders_from_env_malformed_json_falls_back(monkeypatch) -> None:
     monkeypatch.setenv("APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS", "{not valid json")
-    assert h._excluded_folders_from_env() == scoping.DEFAULT_EXCLUDED_FOLDERS
+    assert h._excluded_folders_from_env(None) == scoping.DEFAULT_EXCLUDED_FOLDERS
 
 
 def test_excluded_folders_from_env_unset_uses_default(monkeypatch) -> None:
     monkeypatch.delenv("APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS", raising=False)
-    assert h._excluded_folders_from_env() == scoping.DEFAULT_EXCLUDED_FOLDERS
+    assert h._excluded_folders_from_env(None) == scoping.DEFAULT_EXCLUDED_FOLDERS
 
 
 def test_excluded_folders_from_env_empty_list_excludes_nothing(monkeypatch) -> None:
     monkeypatch.setenv("APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS", "[]")
-    assert h._excluded_folders_from_env() == frozenset()
+    assert h._excluded_folders_from_env(None) == frozenset()
 
 
 def test_excluded_folders_from_env_blank_entries_filtered(monkeypatch) -> None:
     monkeypatch.setenv("APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS", '["hr", "  ", ""]')
-    assert h._excluded_folders_from_env() == frozenset({"hr"})
+    assert h._excluded_folders_from_env(None) == frozenset({"hr"})
+
+
+def test_excluded_folders_from_env_prefers_configured_value(monkeypatch) -> None:
+    config = ConfigClient(client=_FakeSsm())
+    config.put({"excluded_sharepoint_folders": ["legal"]})
+    assert h._excluded_folders_from_env(config) == frozenset({"legal"})
+
+
+def test_sharepoint_sites_prefers_configured_value(monkeypatch) -> None:
+    monkeypatch.setenv("APHRODITE_SHAREPOINT_SITES", '["https://env.example"]')
+    config = ConfigClient(client=_FakeSsm())
+    config.put({"sharepoint_sites": ["https://configured.example"]})
+    assert h._sharepoint_sites_from_env(config) == ["https://configured.example"]
+
+
+def test_sharepoint_sites_falls_back_to_env_when_not_configured(monkeypatch) -> None:
+    monkeypatch.setenv("APHRODITE_SHAREPOINT_SITES", '["https://env.example"]')
+    assert h._sharepoint_sites_from_env(None) == ["https://env.example"]

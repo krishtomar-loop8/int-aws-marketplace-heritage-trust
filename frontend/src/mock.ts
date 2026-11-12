@@ -1,6 +1,7 @@
 // Sample data for mock mode (local design review / screenshots). Mirrors the
 // early-administration estate example from the matter-search spec.
 
+import type { ConfigResponse } from "./api";
 import type {
   ActivityEntry,
   AmlExportEntry,
@@ -19,6 +20,50 @@ export const MOCK_AML_SCHEDULE: AmlSchedule = {
   hour: 0,
   minute: 0,
   timezone: "America/Vancouver",
+};
+
+// Deployment Config tab sample — a mix of "configured" and "using default"
+// fields so both badge states render in mock mode.
+export const MOCK_CONFIG: ConfigResponse = {
+  fields: {
+    org_name: { value: "Aphrodite Trust Company", source: "configured" },
+    org_office_address: { value: "545 Clyde Avenue, West Vancouver", source: "default" },
+    excluded_sharepoint_folders: { value: ["hr", "human resources", "finance"], source: "default" },
+    own_company_names: { value: ["Aphrodite", "Aphrodite Trust Company"], source: "configured" },
+    internal_title_keywords: {
+      value: [
+        "accounting",
+        "bcfsa communication",
+        "finance & compliance",
+        "finance and compliance",
+        "board of directors",
+        "wills bank",
+        "suspense",
+        "natalie's files",
+        "natalies files",
+        "aphrodite - administration",
+        "aphrodite administration",
+      ],
+      source: "default",
+    },
+    internal_matter_number_pattern: { value: "^\\s*(2100-\\d+|999999)\\b", source: "default" },
+    letterhead_name: { value: "Aphrodite", source: "default" },
+    letterhead_address: {
+      value: "220-545 Clyde Avenue, West Vancouver, BC V7T 1C5 | 778.742.5005 | aphrodite.example",
+      source: "default",
+    },
+    letterhead_signoff: { value: "APHRODITE", source: "default" },
+    letterhead_privacy_notice: {
+      value: "Our privacy practices are described at www.aphrodite.example/privacy.",
+      source: "default",
+    },
+    quarterly_qualifying_practice_areas: {
+      value: ["Estate Administration", "Trust Administration"],
+      source: "configured",
+    },
+    quarterly_exclusion_field: { value: "Report Exclusion", source: "default" },
+    sharepoint_sites: { value: ["Estates", "Trusts"], source: "configured" },
+  },
 };
 
 export const MOCK_MATTERS: Matter[] = [

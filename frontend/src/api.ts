@@ -171,6 +171,40 @@ export async function fetchCapabilities(base: string, token?: string): Promise<C
   }
 }
 
+// -- Deployment config (business-config fields; admin-gated writes) ---------
+
+export interface ConfigField { value: unknown; source: "configured" | "default" }
+export interface ConfigResponse { fields: Record<string, ConfigField> }
+
+// Unlike fetchCapabilities, a config read/write failure must not be swallowed
+// into a safe default — it's something the admin needs to see, so a non-OK
+// response's `.error` body throws (same shape as connectEstateably/clioExchange).
+export async function fetchConfig(base: string, token?: string): Promise<ConfigResponse> {
+  const res = await fetch(`${base}/config`, { headers: authHeaders(token) });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null);
+    throw new Error(detail?.error || `Failed to load configuration (${res.status})`);
+  }
+  return (await res.json()) as ConfigResponse;
+}
+
+export async function updateConfig(
+  base: string,
+  updates: Record<string, unknown>,
+  token?: string,
+): Promise<ConfigResponse> {
+  const res = await fetch(`${base}/config`, {
+    method: "PUT",
+    headers: authHeaders(token),
+    body: JSON.stringify(updates),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null);
+    throw new Error(detail?.error || `Failed to save configuration (${res.status})`);
+  }
+  return (await res.json()) as ConfigResponse;
+}
+
 // -- Quarterly report drafts -------------------------------------------------
 
 export async function listReports(base: string, token?: string): Promise<ReportEntry[]> {

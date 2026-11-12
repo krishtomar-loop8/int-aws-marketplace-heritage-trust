@@ -24,7 +24,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from backend.api import connectors_admin
+from backend.api import config_admin, connectors_admin
 from backend.api.activity import ActivityLog
 from backend.api.aml_admin import AmlExportTrigger, AmlScheduleService, ScheduleError
 from backend.api.aml_reports import AmlExportAccessError, AmlExportsService
@@ -40,6 +40,7 @@ from backend.search.orchestrator import DossierBuilder
 from backend.search.quick_answers import QuickAnswerService
 from backend.search.resolve import MatterResolver
 from backend.search.synthesize import MatterSynthesizer
+from services.config import ConfigClient
 from services.logging import get_logger
 from services.secrets import SecretsClient
 
@@ -71,6 +72,33 @@ def _excluded_folders_from_env() -> frozenset[str]:
     return frozenset(str(v).strip().lower() for v in parsed if str(v).strip())
 
 
+def _search_config_overrides(config: ConfigClient | None) -> dict[str, Any]:
+    """Resolve search's three deployment-config values fresh for one request.
+
+    A key present in the stored config wins (checked with ``in``, so a stored
+    empty exclusion list means "exclude nothing"); otherwise the env var/default
+    applies, exactly as at cold start. SSM is re-read (``refresh=True``) on every
+    call: a ``PUT /config`` lands on whichever container served it, so this
+    worker's cached copy would otherwise stay stale for the container's lifetime.
+    """
+    stored = config.get(refresh=True) if config is not None else {}
+    if "excluded_sharepoint_folders" in stored:
+        excluded = frozenset(
+            str(v).strip().lower() for v in stored["excluded_sharepoint_folders"] if str(v).strip()
+        )
+    else:
+        excluded = _excluded_folders_from_env()
+    return {
+        "org_name": stored["org_name"]
+        if "org_name" in stored
+        else os.environ.get("APHRODITE_ORG_NAME", DEFAULT_ORG_NAME),
+        "office_address": stored["org_office_address"]
+        if "org_office_address" in stored
+        else os.environ.get("APHRODITE_ORG_OFFICE_ADDRESS", DEFAULT_ORG_OFFICE_ADDRESS),
+        "excluded_sharepoint_folders": excluded,
+    }
+
+
 @dataclass
 class Deps:
     resolver: MatterResolver
@@ -90,6 +118,7 @@ class Deps:
     integrations: IntegrationHealthStore | None = None
     secrets: SecretsClient | None = None
     connectors_enabled: frozenset[str] = frozenset({"clio", "estateably", "quickbooks", "graph"})
+    config: ConfigClient | None = None
 
 
 _DEPS: Deps | None = None  # cold-start cache / test injection point
@@ -128,6 +157,7 @@ def _build_deps(*, model_id: str | None = None) -> Deps:
     )
 
     secrets = SecretsClient(boto3.client("secretsmanager", region_name=REGION))
+    config = ConfigClient(boto3.client("ssm", region_name=REGION))
     estateably = EstateablyConnector(secrets) if "estateably" in connectors_enabled else None
     clio = ClioConnector(secrets) if "clio" in connectors_enabled else None
     graph = GraphConnector(secrets) if "graph" in connectors_enabled else None
@@ -272,6 +302,7 @@ def _build_deps(*, model_id: str | None = None) -> Deps:
         integrations,
         secrets=secrets,
         connectors_enabled=connectors_enabled,
+        config=config,
     )
 
 
@@ -644,6 +675,29 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
         }
         return _response(200, {"modules": modules, "connectors": connectors})
 
+    # -- Deployment config (business-config tab; GET is visible to everyone,
+    # only PUT is admin-gated) -----------------------------------------------
+    if method == "GET" and path.endswith("/config"):
+        return _response(200, {"fields": config_admin.get_config(deps.config)})
+
+    if method == "PUT" and path.endswith("/config"):
+        forbidden = _require_admin(event)
+        if forbidden:
+            return forbidden
+        updates = _body(event)
+        try:
+            config_admin.put_config(deps.config, updates)
+        except config_admin.ConfigValidationError as exc:
+            return _response(400, {"error": str(exc)})
+        _record(
+            deps,
+            event,
+            "config.update",
+            f"Updated deployment config: {', '.join(sorted(updates))}",
+            detail=updates,
+        )
+        return _response(200, {"fields": config_admin.get_config(deps.config)})
+
     # -- Connector onboarding / reconnect (admin-gated credential writes) ---
     if method == "POST" and path.endswith("/connectors/estateably"):
         if "estateably" not in deps.connectors_enabled:
@@ -785,6 +839,9 @@ def _run_worker(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
             logger.warning("progress write failed", extra={"extra_fields": {"job_id": job_id}})
 
     try:
+        # Inside the try: a config read failure fails this job visibly rather than
+        # silently searching with a possibly-stale exclusion list.
+        overrides = _search_config_overrides(deps.config)
         result = run_search(
             query,
             resolver=deps.resolver,
@@ -798,6 +855,7 @@ def _run_worker(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
             on_phase=on_phase,
             activity=deps.activity,
             remaining_ms=remaining_ms,
+            **overrides,
         )
         deps.store.complete(job_id, result)
         return {"ok": True, "job_id": job_id}

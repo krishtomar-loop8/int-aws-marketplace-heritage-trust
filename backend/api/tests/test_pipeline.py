@@ -102,6 +102,57 @@ def test_search_no_sources_when_every_connector_disabled() -> None:
     assert out["status"] == "no_sources"
 
 
+class RecordingBuilder(FakeBuilder):
+    def __init__(self, dossier: MatterDossier, calls: dict[str, Any]) -> None:
+        super().__init__(dossier)
+        self._calls = calls
+
+    def build(self, candidate: MatterCandidate, **kwargs: Any) -> MatterDossier:
+        self._calls["build"] = kwargs
+        return super().build(candidate, **kwargs)
+
+
+class RecordingSynth(FakeSynth):
+    def __init__(self, result: SynthesisResult, calls: dict[str, Any]) -> None:
+        super().__init__(result)
+        self._calls = calls
+
+    def synthesize(self, dossier: MatterDossier, query: str, **kwargs: Any) -> SynthesisResult:
+        self._calls["synthesize"] = kwargs
+        return super().synthesize(dossier, query, **kwargs)
+
+
+def test_run_search_threads_config_overrides_into_build_and_synthesize() -> None:
+    calls: dict[str, Any] = {}
+    out = run_search(
+        "q",
+        resolver=FakeResolver(_resolution([_candidate()])),
+        dossier_builder=RecordingBuilder(MatterDossier("x", None), calls),
+        synthesizer=RecordingSynth(_synth(), calls),
+        excluded_sharepoint_folders=frozenset({"legal"}),
+        org_name="Acme Trust",
+        office_address="1 Main St",
+    )
+    assert out["status"] == "ok"
+    assert calls["build"]["excluded_sharepoint_folders"] == frozenset({"legal"})
+    assert calls["synthesize"]["org_name"] == "Acme Trust"
+    assert calls["synthesize"]["office_address"] == "1 Main St"
+
+
+def test_run_search_without_config_overrides_passes_none() -> None:
+    # None ⇒ the builder/synthesizer fall back to their constructed values.
+    calls: dict[str, Any] = {}
+    run_search(
+        "q",
+        resolver=FakeResolver(_resolution([_candidate()])),
+        dossier_builder=RecordingBuilder(MatterDossier("x", None), calls),
+        synthesizer=RecordingSynth(_synth(), calls),
+    )
+    assert calls["build"]["excluded_sharepoint_folders"] is None
+    assert calls["synthesize"]["org_name"] is None
+    assert calls["synthesize"]["office_address"] is None
+
+
 def test_search_disambiguation_when_multiple() -> None:
     cands = [_candidate("Smith Estate"), _candidate("Smithson Estate")]
     out = run_search(

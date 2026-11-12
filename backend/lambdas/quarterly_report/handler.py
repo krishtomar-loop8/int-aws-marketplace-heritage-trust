@@ -37,10 +37,11 @@ import json
 import os
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from typing import Any
 
+from services.config import ConfigClient
 from services.logging import get_logger
 
 from .classification import load_classification
@@ -57,15 +58,22 @@ logger = get_logger(__name__)
 REGION = os.environ.get("APHRODITE_REGION", "ca-central-1")
 
 
-def _letterhead_from_env() -> LetterheadConfig:
+def _letterhead_from_env(config: ConfigClient | None) -> LetterheadConfig:
     default = LetterheadConfig()
+    stored = config.get() if config is not None else {}
     return LetterheadConfig(
-        name=os.environ.get("APHRODITE_LETTERHEAD_NAME", default.name),
-        address=os.environ.get("APHRODITE_LETTERHEAD_ADDRESS", default.address),
-        signoff=os.environ.get("APHRODITE_LETTERHEAD_SIGNOFF", default.signoff),
-        privacy_notice=os.environ.get(
-            "APHRODITE_LETTERHEAD_PRIVACY_NOTICE", default.privacy_notice
-        ),
+        name=stored["letterhead_name"]
+        if "letterhead_name" in stored
+        else os.environ.get("APHRODITE_LETTERHEAD_NAME", default.name),
+        address=stored["letterhead_address"]
+        if "letterhead_address" in stored
+        else os.environ.get("APHRODITE_LETTERHEAD_ADDRESS", default.address),
+        signoff=stored["letterhead_signoff"]
+        if "letterhead_signoff" in stored
+        else os.environ.get("APHRODITE_LETTERHEAD_SIGNOFF", default.signoff),
+        privacy_notice=stored["letterhead_privacy_notice"]
+        if "letterhead_privacy_notice" in stored
+        else os.environ.get("APHRODITE_LETTERHEAD_PRIVACY_NOTICE", default.privacy_notice),
     )
 
 
@@ -83,6 +91,10 @@ class Deps:
     qualifying_practice_areas: tuple[str, ...] = ()
     exclusion_field: str = ""
     letterhead: LetterheadConfig = LetterheadConfig()
+    # The deployment config store. When set, handler() re-resolves the three
+    # config-backed fields above from it on every invocation (see
+    # _with_current_config); None keeps them as constructed (test injection).
+    config: ConfigClient | None = None
 
 
 _DEPS: Deps | None = None  # cold-start cache / test injection point
@@ -95,6 +107,7 @@ def _build_deps() -> Deps:
     from services.secrets import SecretsClient
 
     secrets = SecretsClient(boto3.client("secretsmanager", region_name=REGION))
+    config = ConfigClient(boto3.client("ssm", region_name=REGION))
     s3 = boto3.client("s3", region_name=REGION)
     # Staff-editable account-name → asset-category map from the reference bucket;
     # absent ⇒ in-code defaults (Nicole's Decision A rules). See classification.py.
@@ -156,15 +169,44 @@ def _build_deps() -> Deps:
         delivery=_build_delivery(secrets),
         delay_seconds=float(os.environ.get("APHRODITE_QUARTERLY_MATTER_DELAY_SECONDS", "1.2")),
         clio=clio,
-        qualifying_practice_areas=_qualifying_from_env(),
-        exclusion_field=os.environ.get("APHRODITE_QUARTERLY_EXCLUSION_FIELD", "").strip(),
-        letterhead=_letterhead_from_env(),
+        config=config,
     )
 
 
-def _qualifying_from_env() -> tuple[str, ...]:
+def _exclusion_field_from_env(config: ConfigClient | None) -> str:
+    stored = config.get() if config is not None else {}
+    if "quarterly_exclusion_field" in stored:
+        return stored["quarterly_exclusion_field"]
+    return os.environ.get("APHRODITE_QUARTERLY_EXCLUSION_FIELD", "").strip()
+
+
+def _with_current_config(deps: Deps) -> Deps:
+    """Return ``deps`` with its config-backed fields re-resolved from the store.
+
+    Called on every invocation rather than in the cached ``_build_deps()``: the
+    portal can re-run generation on a warm container right after an admin
+    saves a config change, which must apply. Returns a copy, so the cached
+    ``_DEPS`` (connectors, boto3 clients) is reused but never mutated.
+    """
+    if deps.config is None:
+        return deps
+    # One refresh (the client lives in _DEPS, so its cache would otherwise pin
+    # the first invocation's config); the three resolvers below read that.
+    deps.config.get(refresh=True)
+    return replace(
+        deps,
+        qualifying_practice_areas=_qualifying_from_env(deps.config),
+        exclusion_field=_exclusion_field_from_env(deps.config),
+        letterhead=_letterhead_from_env(deps.config),
+    )
+
+
+def _qualifying_from_env(config: ConfigClient | None) -> tuple[str, ...]:
     """Parse ``APHRODITE_QUARTERLY_QUALIFYING_PRACTICE_AREAS`` (a JSON list, or a
     comma-separated string as a fallback) into practice-area names."""
+    stored = config.get() if config is not None else {}
+    if "quarterly_qualifying_practice_areas" in stored:
+        return tuple(str(v) for v in stored["quarterly_qualifying_practice_areas"])
     raw = os.environ.get("APHRODITE_QUARTERLY_QUALIFYING_PRACTICE_AREAS", "").strip()
     if not raw:
         return ()
@@ -256,7 +298,7 @@ def _resolve_letter_date(event: dict[str, Any], *, today: date) -> date:
 
 def handler(event: dict[str, Any] | None = None, context: Any = None) -> dict[str, Any]:
     event = event or {}
-    deps = _get_deps()
+    deps = _with_current_config(_get_deps())
     now = datetime.now(UTC)
     today = now.date()
 

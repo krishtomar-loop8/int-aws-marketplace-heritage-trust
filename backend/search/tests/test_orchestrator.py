@@ -1100,6 +1100,79 @@ def test_dossier_builder_uses_custom_excluded_folders() -> None:
     assert len(docs) == 1 and "will.pdf" in docs[0].summary  # the Payroll doc is dropped
 
 
+def _payroll_and_finance_kb() -> FakeKB:
+    return FakeKB(
+        [
+            _kbhit(
+                "John Smith matter doc.",
+                "will.pdf",
+                web_url="https://x/sites/DataA/Matters/Smith/will.pdf",
+            ),
+            # On-matter text, so only the folder exclusion (not the matter-scope
+            # filter) decides whether these two survive.
+            _kbhit(
+                "John Smith payroll.",
+                "pay.xlsx",
+                web_url="https://x/sites/DataA/Payroll/2026/pay.xlsx",
+            ),
+            _kbhit(
+                "John Smith ledger.",
+                "gl.xlsx",
+                web_url="https://x/sites/DataA/Finance/2026/gl.xlsx",
+            ),
+        ]
+    )
+
+
+def _smith_cand() -> MatterCandidate:
+    return MatterCandidate(
+        name="Estate of John Smith",
+        refs=[SourceRef("clio", "123", "Smith")],
+        matter_type="estate",
+    )
+
+
+def test_build_override_replaces_the_constructed_exclusion_set() -> None:
+    # Constructed with {"payroll"}, overridden per call with {"finance"}: the
+    # override wins outright (Finance dropped, Payroll kept) — not unioned.
+    builder = DossierBuilder(
+        knowledge_base=_payroll_and_finance_kb(),
+        excluded_sharepoint_folders=frozenset({"payroll"}),
+    )
+    d = builder.build(
+        _smith_cand(),
+        correspondence_term="smith",
+        excluded_sharepoint_folders=frozenset({"finance"}),
+    )
+    docs = d.section("documents").items
+    summaries = " ".join(i.summary for i in docs)
+    assert len(docs) == 2
+    assert "pay.xlsx" in summaries and "will.pdf" in summaries
+    assert "gl.xlsx" not in summaries
+
+
+def test_build_override_empty_set_excludes_nothing() -> None:
+    # An explicit empty override is honored ("exclude nothing"), not treated as unset.
+    builder = DossierBuilder(
+        knowledge_base=_payroll_and_finance_kb(),
+        excluded_sharepoint_folders=frozenset({"payroll", "finance"}),
+    )
+    d = builder.build(
+        _smith_cand(), correspondence_term="smith", excluded_sharepoint_folders=frozenset()
+    )
+    assert len(d.section("documents").items) == 3
+
+
+def test_build_without_override_uses_the_constructed_exclusion_set() -> None:
+    builder = DossierBuilder(
+        knowledge_base=_payroll_and_finance_kb(),
+        excluded_sharepoint_folders=frozenset({"payroll"}),
+    )
+    d = builder.build(_smith_cand(), correspondence_term="smith")
+    summaries = " ".join(i.summary for i in d.section("documents").items)
+    assert "pay.xlsx" not in summaries and "gl.xlsx" in summaries
+
+
 def test_collect_sharepoint_excludes_off_matter_documents() -> None:
     # The firm-wide index returns another client's document; it must be dropped
     # (confidentiality) — it carries neither this matter's number nor client name.

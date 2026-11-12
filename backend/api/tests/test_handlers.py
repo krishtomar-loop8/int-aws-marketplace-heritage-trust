@@ -12,6 +12,24 @@ from backend.api.jobs import InMemoryJobStore
 from backend.search import scoping
 
 
+class _FakeSsmForConfig:
+    def __init__(self):
+        self.params = {}
+
+    def get_parameter(self, *, Name):
+        from botocore.exceptions import ClientError
+
+        if Name not in self.params:
+            raise ClientError(
+                {"Error": {"Code": "ParameterNotFound", "Message": "not found"}},
+                "GetParameter",
+            )
+        return {"Parameter": {"Value": self.params[Name]}}
+
+    def put_parameter(self, *, Name, Value, Type, Overwrite):
+        self.params[Name] = Value
+
+
 class FakeResolver:
     def __init__(self, result: Any) -> None:
         self._result = result
@@ -834,3 +852,234 @@ def test_quickbooks_callback_route_redirects_without_admin_header(
     resp = handlers.handler(event)
     assert resp["statusCode"] == 302
     assert resp["headers"]["Location"] == "https://app.example/?setup=quickbooks-connected"
+
+
+# -- Deployment config (GET/PUT /config) -------------------------------------
+
+
+def test_get_config_route_returns_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    from services.config import ConfigClient
+
+    deps, _ = install_deps(monkeypatch)
+    deps.config = ConfigClient(client=_FakeSsmForConfig())
+    resp = handlers.handler(api_event("GET", "/config"))
+    assert resp["statusCode"] == 200
+    assert "org_name" in json.loads(resp["body"])["fields"]
+
+
+def test_put_config_route_requires_admin(monkeypatch: pytest.MonkeyPatch) -> None:
+    from services.config import ConfigClient
+
+    deps, _ = install_deps(monkeypatch)
+    deps.config = ConfigClient(client=_FakeSsmForConfig())
+    resp = handlers.handler(api_event("PUT", "/config", body={"org_name": "Acme Trust"}))
+    assert resp["statusCode"] == 403
+
+
+def test_put_config_route_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    from services.config import ConfigClient
+
+    deps, _ = install_deps(monkeypatch)
+    deps.config = ConfigClient(client=_FakeSsmForConfig())
+    resp = handlers.handler(
+        admin_api_event("PUT", "/config", body={"org_name": "Acme Trust"})
+    )
+    assert resp["statusCode"] == 200
+    assert deps.config.get(refresh=True)["org_name"] == "Acme Trust"
+
+
+def test_put_config_route_rejects_invalid_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    from services.config import ConfigClient
+
+    deps, _ = install_deps(monkeypatch)
+    deps.config = ConfigClient(client=_FakeSsmForConfig())
+    resp = handlers.handler(
+        admin_api_event(
+            "PUT", "/config", body={"internal_matter_number_pattern": "["}
+        )
+    )
+    assert resp["statusCode"] == 400
+    assert "internal_matter_number_pattern" in json.loads(resp["body"])["error"]
+
+
+def test_put_config_route_records_an_audit_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Editing own_company_names/internal_title_keywords changes who gets
+    # AML-screened, so who changed the config (and to what) must be logged.
+    from services.config import ConfigClient
+
+    deps, _ = install_deps(monkeypatch)
+    deps.config = ConfigClient(client=_FakeSsmForConfig())
+    deps.activity = FakeActivity()  # type: ignore[assignment]
+    body = {"own_company_names": ["Clark, Wilson LLP"], "org_name": None}
+    resp = handlers.handler(admin_api_event("PUT", "/config", body=body))
+    assert resp["statusCode"] == 200
+    assert len(deps.activity.records) == 1
+    entry = deps.activity.records[0]
+    assert entry["action"] == "config.update"
+    assert entry["summary"] == "Updated deployment config: org_name, own_company_names"
+    assert entry["detail"] == body
+    assert entry["actor"]["email"]
+
+
+def test_put_config_route_audit_entry_matches_the_real_record_signature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Real ActivityLog.record (not FakeActivity) so an unsupported kwarg fails.
+    from backend.api.activity import ActivityLog
+    from services.config import ConfigClient
+
+    items: list[dict] = []
+
+    class _FakeDdb:
+        def put_item(self, *, TableName, Item):
+            items.append(Item)
+
+    deps, _ = install_deps(monkeypatch)
+    deps.config = ConfigClient(client=_FakeSsmForConfig())
+    deps.activity = ActivityLog("t", client=_FakeDdb())
+    resp = handlers.handler(admin_api_event("PUT", "/config", body={"org_name": "Acme"}))
+    assert resp["statusCode"] == 200
+    assert [item["action"]["S"] for item in items] == ["config.update"]
+
+
+def test_put_config_route_rejected_update_records_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.config import ConfigClient
+
+    deps, _ = install_deps(monkeypatch)
+    deps.config = ConfigClient(client=_FakeSsmForConfig())
+    deps.activity = FakeActivity()  # type: ignore[assignment]
+    resp = handlers.handler(
+        admin_api_event("PUT", "/config", body={"internal_matter_number_pattern": "["})
+    )
+    assert resp["statusCode"] == 400
+    assert deps.activity.records == []
+
+
+# -- Per-request config resolution in the search worker ---------------------
+
+
+def _record_worker_overrides(
+    monkeypatch: pytest.MonkeyPatch, deps: handlers.Deps
+) -> list[dict[str, Any]]:
+    """Record the config overrides each worker run passes to build + synthesize."""
+    seen: list[dict[str, Any]] = []
+    real_build = deps.dossier_builder.build
+    real_synthesize = deps.synthesizer.synthesize
+
+    def recording_build(c: Any, **kwargs: Any) -> Any:
+        seen.append({"excluded_sharepoint_folders": kwargs.get("excluded_sharepoint_folders")})
+        return real_build(c, **kwargs)
+
+    def recording_synthesize(d: Any, q: str, **kwargs: Any) -> Any:
+        seen[-1]["org_name"] = kwargs.get("org_name")
+        seen[-1]["office_address"] = kwargs.get("office_address")
+        return real_synthesize(d, q, **kwargs)
+
+    monkeypatch.setattr(deps.dossier_builder, "build", recording_build)
+    monkeypatch.setattr(deps.synthesizer, "synthesize", recording_synthesize)
+    return seen
+
+
+def _run_worker_job(deps: handlers.Deps, job_id: str) -> None:
+    deps.store.create(job_id, "Smith", {"sub": "u"})
+    out = handlers.handler({"worker": True, "job_id": job_id, "query": "Smith", "actor": {}})
+    assert out["ok"] is True
+
+
+def test_config_change_is_visible_to_the_next_request_without_a_new_deps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Review Focus. One Deps (a warm container) serves two searches. Between them an
+    # admin saves new values — through a *different* ConfigClient on the same SSM
+    # store, because in production the PUT /config request and the async search
+    # worker run in different Lambda containers. Saving through deps.config itself
+    # would update its in-memory cache and pass even if the worker never re-read SSM.
+    from services.config import ConfigClient
+
+    monkeypatch.delenv("APHRODITE_ORG_NAME", raising=False)
+    monkeypatch.delenv("APHRODITE_ORG_OFFICE_ADDRESS", raising=False)
+    monkeypatch.delenv("APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS", raising=False)
+    ssm = _FakeSsmForConfig()
+    deps, _ = install_deps(monkeypatch)
+    deps.config = ConfigClient(client=ssm)
+    seen = _record_worker_overrides(monkeypatch, deps)
+
+    _run_worker_job(deps, "j1")
+    ConfigClient(client=ssm).put(
+        {
+            "org_name": "Acme Trust",
+            "org_office_address": "1 Main St",
+            "excluded_sharepoint_folders": ["Legal", "Payroll"],
+        }
+    )
+    _run_worker_job(deps, "j2")
+
+    assert seen[0] == {
+        "excluded_sharepoint_folders": scoping.DEFAULT_EXCLUDED_FOLDERS,
+        "org_name": handlers.DEFAULT_ORG_NAME,
+        "office_address": handlers.DEFAULT_ORG_OFFICE_ADDRESS,
+    }
+    assert seen[1] == {
+        "excluded_sharepoint_folders": frozenset({"legal", "payroll"}),
+        "org_name": "Acme Trust",
+        "office_address": "1 Main St",
+    }
+
+
+def test_worker_honors_a_stored_empty_exclusion_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Presence (``in``), not truthiness: an admin who clears the list to [] means
+    # "exclude nothing" — it must not silently fall back to the env var.
+    from services.config import ConfigClient
+
+    monkeypatch.setenv("APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS", '["hr"]')
+    ssm = _FakeSsmForConfig()
+    deps, _ = install_deps(monkeypatch)
+    deps.config = ConfigClient(client=ssm)
+    ConfigClient(client=ssm).put({"excluded_sharepoint_folders": []})
+    seen = _record_worker_overrides(monkeypatch, deps)
+
+    _run_worker_job(deps, "j1")
+
+    assert seen[0]["excluded_sharepoint_folders"] == frozenset()
+
+
+def test_worker_falls_back_to_env_when_a_key_is_not_stored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.config import ConfigClient
+
+    monkeypatch.setenv("APHRODITE_ORG_NAME", "Env Trust")
+    monkeypatch.setenv("APHRODITE_ORG_OFFICE_ADDRESS", "2 Env Rd")
+    monkeypatch.setenv("APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS", "hr, payroll")
+    ssm = _FakeSsmForConfig()
+    deps, _ = install_deps(monkeypatch)
+    deps.config = ConfigClient(client=ssm)
+    ConfigClient(client=ssm).put({"org_name": "Stored Trust"})
+    seen = _record_worker_overrides(monkeypatch, deps)
+
+    _run_worker_job(deps, "j1")
+
+    assert seen[0] == {
+        "excluded_sharepoint_folders": frozenset({"hr", "payroll"}),
+        "org_name": "Stored Trust",
+        "office_address": "2 Env Rd",
+    }
+
+
+def test_worker_without_a_config_client_uses_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APHRODITE_ORG_NAME", "Env Trust")
+    monkeypatch.delenv("APHRODITE_ORG_OFFICE_ADDRESS", raising=False)
+    monkeypatch.delenv("APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS", raising=False)
+    deps, _ = install_deps(monkeypatch)
+    assert deps.config is None
+    seen = _record_worker_overrides(monkeypatch, deps)
+
+    _run_worker_job(deps, "j1")
+
+    assert seen[0] == {
+        "excluded_sharepoint_folders": scoping.DEFAULT_EXCLUDED_FOLDERS,
+        "org_name": "Env Trust",
+        "office_address": handlers.DEFAULT_ORG_OFFICE_ADDRESS,
+    }

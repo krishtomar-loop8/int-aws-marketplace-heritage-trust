@@ -25,6 +25,7 @@ from backend.lambdas.aml_export.designations import load_designations
 from backend.lambdas.aml_export.excel import build_workbook_bytes
 from backend.lambdas.aml_export.export import run_export
 from backend.lambdas.aml_export.storage import AmlExportStorage
+from services.config import ConfigClient
 from services.logging import get_logger
 
 logger = get_logger(__name__)
@@ -53,16 +54,23 @@ def _json_list_from_env(var_name: str, default: tuple[str, ...]) -> tuple[str, .
     return tuple(str(v).strip() for v in parsed if str(v).strip())
 
 
-def _org_config_from_env() -> quality.OrgConfig:
+def _org_config_from_env(config: ConfigClient | None) -> quality.OrgConfig:
     default = quality.OrgConfig()
+    # refresh=True: the client is cached with _DEPS for the warm container's
+    # lifetime, so its own cache would otherwise pin the first invocation's config.
+    stored = config.get(refresh=True) if config is not None else {}
     return quality.OrgConfig(
-        own_company_names=_json_list_from_env(
-            "APHRODITE_OWN_COMPANY_NAMES", default.own_company_names
-        ),
-        internal_title_keywords=_json_list_from_env(
+        own_company_names=tuple(str(v) for v in stored["own_company_names"])
+        if "own_company_names" in stored
+        else _json_list_from_env("APHRODITE_OWN_COMPANY_NAMES", default.own_company_names),
+        internal_title_keywords=tuple(str(v) for v in stored["internal_title_keywords"])
+        if "internal_title_keywords" in stored
+        else _json_list_from_env(
             "APHRODITE_INTERNAL_TITLE_KEYWORDS", default.internal_title_keywords
         ),
-        internal_number_pattern=os.environ.get(
+        internal_number_pattern=stored["internal_matter_number_pattern"]
+        if "internal_matter_number_pattern" in stored
+        else os.environ.get(
             "APHRODITE_INTERNAL_MATTER_NUMBER_PATTERN", default.internal_number_pattern
         ),
     )
@@ -76,19 +84,20 @@ class Deps:
     notify: Callable[[dict[str, str], dict[str, Any]], None]
     designations_bucket: str | None = None
     designations_key: str | None = None
+    config: ConfigClient | None = None
 
 
 _DEPS: Deps | None = None  # cold-start cache / test injection point
 
 
 def _build_deps() -> Deps:
-    quality.configure(_org_config_from_env())
-
     import boto3
 
     from backend.connectors.clio.connector import ClioConnector
     from backend.connectors.estateably.connector import EstateablyConnector
     from services.secrets import SecretsClient
+
+    config = ConfigClient(boto3.client("ssm", region_name=REGION))
 
     secrets = SecretsClient(boto3.client("secretsmanager", region_name=REGION))
     estateably = EstateablyConnector(secrets)
@@ -126,6 +135,7 @@ def _build_deps() -> Deps:
         notify=notify,
         designations_bucket=os.environ.get("APHRODITE_REFERENCE_BUCKET"),
         designations_key=os.environ.get("APHRODITE_AML_DESIGNATIONS_KEY"),
+        config=config,
     )
 
 
@@ -139,6 +149,9 @@ def _get_deps() -> Deps:
 def handler(event: dict[str, Any] | None = None, context: Any = None) -> dict[str, Any]:
     del event, context
     deps = _get_deps()
+    # Resolved per invocation, not in the cached _build_deps(): an on-demand
+    # re-run on a warm container must see a config change saved in between.
+    quality.configure(_org_config_from_env(deps.config))
 
     now = datetime.now(UTC)
     designations = load_designations(
