@@ -43,52 +43,13 @@ ALERT_THRESHOLD = 2
 def suggest_fix(integration: str, detail: str) -> str:
     """Map a connector error detail to a plain-language suggested fix for staff.
 
-    ``detail`` is the harness's ``"<ExcType>: <message>"`` string. The mapping is
-    deterministic (pattern match) and errs toward "likely transient" for network
-    blips so staff aren't sent chasing a fix that resolves itself.
+    Thin wrapper over the shared catalog (``services.errors.classify``) —
+    kept as its own function because its two existing callers (the health
+    probe and connector-connect admin path) only need the message string.
     """
-    d = (detail or "").lower()
-    auth_markers = ("token refresh failed", "invalid_grant", "unauthorized", " 401", ":401")
-    if any(k in d for k in auth_markers):
-        if integration == "quickbooks":
-            return (
-                "The QuickBooks OAuth token has expired or been revoked. Re-authorize the "
-                "connection — run the QuickBooks bootstrap to mint a fresh refresh token "
-                "(it self-rotates thereafter). See the QuickBooks setup guide."
-            )
-        return (
-            "Authentication failed — the connector's token/credentials are expired or "
-            "invalid. Re-authorize the connector or rotate its secret in Secrets Manager."
-        )
-    if "402" in d:
-        return (
-            "The provider reported a billing/payment hold on the account (HTTP 402). "
-            "Check the provider's subscription/billing status."
-        )
-    if "403" in d or "forbidden" in d:
-        return (
-            "Access was denied (HTTP 403). Check the connector's API scopes/permissions "
-            "and that the app is still authorized on the provider side."
-        )
-    if any(k in d for k in ("429", "throttl", "rate limit", "too many requests")):
-        return (
-            "The provider is rate-limiting requests (HTTP 429). This is usually transient "
-            "and should clear on the next check."
-        )
-    if any(k in d for k in ("timed out", "timeout", "readtimeout", "connecttimeout", "connection")):
-        return (
-            "The provider was slow or unreachable. This is usually transient — it should "
-            "clear on the next check; if it persists, check the provider's status page."
-        )
-    if any(k in d for k in ("500", "502", "503", "504", "serviceunavailable", "server error")):
-        return (
-            "The provider returned a server error (5xx) — likely a provider-side outage. "
-            "It should recover on its own; retry shortly."
-        )
-    return (
-        "The connector returned an error (see the detail). If it persists, check the "
-        "credentials in Secrets Manager and the provider's status page."
-    )
+    from services.errors import classify
+
+    return classify(detail, integration=integration).message
 
 
 @dataclass
