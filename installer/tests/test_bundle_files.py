@@ -34,3 +34,8 @@ def test_deploy_script_never_bypasses_governance():
     script = (INSTALLER / "deploy.sh").read_text().lower()
     assert "bypass-governance" not in script
     assert "bypassgovernance" not in script
+
+
+def test_deploy_script_sources_the_classifier():
+    script = (INSTALLER / "deploy.sh").read_text()
+    assert "source installer/classify_apply_failure.sh" in script

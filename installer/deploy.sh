@@ -57,6 +57,8 @@ require() {
   done
 }
 
+source installer/classify_apply_failure.sh
+
 # --- helpers ---------------------------------------------------------------------------------
 
 tf() {
@@ -277,7 +279,21 @@ do_apply() {
   STEP="terraform plan"
   tf plan -input=false -out=tfplan
   STEP="terraform apply"
-  tf apply -input=false tfplan
+  # tf apply's own failure must not reach the ERR trap here: bash fires the ERR trap on a
+  # failing simple command regardless of the current set -e/+e state, exempting only a command
+  # on the left of && / || (among other contexts) -- `set +e; ...; set -e` around it does NOT
+  # suppress the trap, so `|| rc=$?` is used instead to capture the exit code without tripping it.
+  local rc=0
+  tf apply -input=false tfplan >"$WORK/apply.out" 2>&1 || rc=$?
+  cat "$WORK/apply.out"
+  if ((rc != 0)); then
+    local classified
+    classified=$(classify_apply_failure "$WORK/apply.out")
+    if [[ -n $classified ]]; then
+      fail "$classified"
+    fi
+    return "$rc"
+  fi
 }
 
 # Same as the "Build & deploy SPA" step in .github/workflows/terraform.yml, minus the npm
