@@ -18,7 +18,7 @@ classify_apply_failure() {
     return
   fi
   if [[ $text == *AccessDenied* || $text == *UnauthorizedOperation* || $text == *"is not authorized to perform"* ]]; then
-    echo "The deploying IAM role/user lacks a permission terraform needs (AccessDenied/UnauthorizedOperation). Check the IAM policy attached to the role running this deployment, then retry the stack update."
+    echo "A permission needed by this deployment was denied by AWS (AccessDenied/UnauthorizedOperation). If your organization applies service control policies or permission boundaries, check whether they block this action; otherwise contact Loop8 support with the build log (the installer role's permissions are managed by this stack — do not edit them manually)."
     return
   fi
 }
