@@ -11,10 +11,10 @@ re-authorize special case). When it is ``None``, messages are connector-agnostic
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class ErrorClass(str, Enum):
+class ErrorClass(StrEnum):
     TRANSIENT = "transient"
     PERMANENT = "permanent"
     NEEDS_REAUTH = "needs_reauth"
