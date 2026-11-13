@@ -1119,3 +1119,46 @@ def test_dismiss_setup_status_route_success(monkeypatch: pytest.MonkeyPatch) -> 
     # Visible on a subsequent GET too (a fresh read, not just the POST's own echo).
     get_resp = handlers.handler(api_event("GET", "/setup-status"))
     assert json.loads(get_resp["body"]) == {"dismissed": True}
+
+
+def test_get_setup_status_route_sees_a_dismiss_from_another_warm_container(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression: the GET route must pass refresh=True. ConfigClient caches
+    # its result for the life of the container, so a GET through a *different*
+    # ConfigClient instance (standing in for another warm Lambda container)
+    # must still see a dismiss written elsewhere — not a stale `{}` reread from
+    # its own cache.
+    from services.config import ConfigClient
+
+    ssm = _FakeSsmForConfig()
+    deps, _ = install_deps(monkeypatch)
+    deps.setup_status = ConfigClient(client=ssm)
+
+    # Warm this container's cache with the pre-dismiss value, as a prior GET
+    # on this same container would have done.
+    first_get = handlers.handler(api_event("GET", "/setup-status"))
+    assert json.loads(first_get["body"]) == {"dismissed": False}
+
+    # Dismiss via a second, independent ConfigClient/Deps (another container).
+    ConfigClient(client=ssm).put({"dismissed": True})
+
+    # The original container's GET route must still reflect the dismiss.
+    second_get = handlers.handler(api_event("GET", "/setup-status"))
+    assert json.loads(second_get["body"]) == {"dismissed": True}
+
+
+def test_dismiss_setup_status_route_records_an_audit_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.config import ConfigClient
+
+    deps, _ = install_deps(monkeypatch)
+    deps.setup_status = ConfigClient(client=_FakeSsmForConfig())
+    deps.activity = FakeActivity()  # type: ignore[assignment]
+    resp = handlers.handler(admin_api_event("POST", "/setup-status/dismiss"))
+    assert resp["statusCode"] == 200
+    assert len(deps.activity.records) == 1
+    entry = deps.activity.records[0]
+    assert entry["action"] == "setup.dismiss"
+    assert entry["actor"]["email"]

@@ -707,13 +707,19 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
     # -- First-run setup wizard dismissal flag (GET visible to everyone,
     # only the dismiss action is admin-gated) ---------------------------------
     if method == "GET" and path.endswith("/setup-status"):
-        return _response(200, {"dismissed": bool(deps.setup_status.get().get("dismissed"))})
+        # Re-reads the store (refresh=True): a dismiss only updates the cache of
+        # the container that served it, so another warm container would
+        # otherwise report its own stale copy (same reasoning as get_config).
+        return _response(
+            200, {"dismissed": bool(deps.setup_status.get(refresh=True).get("dismissed"))}
+        )
 
     if method == "POST" and path.endswith("/setup-status/dismiss"):
         forbidden = _require_admin(event)
         if forbidden:
             return forbidden
         deps.setup_status.put({"dismissed": True})
+        _record(deps, event, "setup.dismiss", "Dismissed the first-run setup wizard")
         return _response(200, {"dismissed": True})
 
     # -- Connector onboarding / reconnect (admin-gated credential writes) ---
