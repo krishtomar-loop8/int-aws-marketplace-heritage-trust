@@ -60,10 +60,12 @@ export function SetupWizard({
   // every other load starts at the first step.
   const isQuickBooksResult =
     setupResult === "quickbooks-connected" || setupResult === "quickbooks-error";
-  const [index, setIndex] = useState(() => {
-    const qb = steps.indexOf("quickbooks");
-    return isQuickBooksResult && qb >= 0 ? qb : 0;
-  });
+  // Tracked by step id, not index: App's capabilities start all-enabled and
+  // resolve asynchronously, which can remove steps after first render — an
+  // index would then silently point at a different step.
+  const [currentId, setCurrentId] = useState<StepId>(() =>
+    isQuickBooksResult ? "quickbooks" : steps[0],
+  );
   const [skipped, setSkipped] = useState<Set<StepId>>(() => new Set());
   const [configDone, setConfigDone] = useState(false);
   const [dismissing, setDismissing] = useState(false);
@@ -85,9 +87,10 @@ export function SetupWizard({
     };
   }, [apiBase, token]);
 
-  // Capabilities can resolve after first render and shrink the step list —
-  // never point past its end.
-  const current = steps[Math.min(index, steps.length - 1)];
+  // A step that's no longer in the list (its connector turned out to be
+  // disabled once capabilities resolved) falls back to the first step.
+  const current = steps.includes(currentId) ? currentId : steps[0];
+  const position = steps.indexOf(current);
 
   // Connector "already done": a health row exists, regardless of row.ok (spec §6).
   function isDone(step: StepId): boolean {
@@ -100,7 +103,7 @@ export function SetupWizard({
   }
 
   function advance() {
-    setIndex((i) => Math.min(i + 1, steps.length - 1));
+    setCurrentId(steps[Math.min(position + 1, steps.length - 1)]);
   }
 
   function skip() {
@@ -185,7 +188,7 @@ export function SetupWizard({
         ) : (
           <div className="connector-card-block" style={{ marginTop: "1rem" }}>
             <h3>
-              Step {steps.indexOf(current) + 1} of {steps.length}: Connect {LABELS[current]}
+              Step {position + 1} of {steps.length}: Connect {LABELS[current]}
             </h3>
             {currentDone && (
               <p className="schedule-status" style={{ marginBottom: "0.6rem" }}>
