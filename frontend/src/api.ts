@@ -171,6 +171,35 @@ export async function fetchCapabilities(base: string, token?: string): Promise<C
   }
 }
 
+// First-run setup wizard: whether an admin has dismissed it. Fails closed — a
+// non-OK response or a network error reports "not dismissed" rather than
+// silently skipping the wizard. Never throws.
+export async function fetchSetupStatus(
+  base: string,
+  token?: string,
+): Promise<{ dismissed: boolean }> {
+  try {
+    const res = await fetch(`${base}/setup-status`, { headers: authHeaders(token) });
+    if (!res.ok) return { dismissed: false }; // fail closed — never skip the wizard by accident
+    return (await res.json()) as { dismissed: boolean };
+  } catch {
+    return { dismissed: false };
+  }
+}
+
+// Admin-gated. Unlike fetchSetupStatus, a failure throws so it stays visible
+// to the admin (same pattern as updateConfig).
+export async function dismissSetup(base: string, token?: string): Promise<void> {
+  const res = await fetch(`${base}/setup-status/dismiss`, {
+    method: "POST",
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null);
+    throw new Error(detail?.error || `Failed to dismiss setup (${res.status})`);
+  }
+}
+
 // -- Deployment config (business-config fields; admin-gated writes) ---------
 
 export interface ConfigField { value: unknown; source: "configured" | "default" }
