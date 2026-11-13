@@ -642,6 +642,11 @@ body {
 .connector-card-block { margin: 0 0 1.3rem; }
 .connector-card-block h3 { margin: 0 0 0.5rem; font-size: 0.95rem; color: var(--forest-2); }
 
+/* The base .link-btn is tuned for the dark sidebar (light text, no fill) and is
+   unreadable on this light card, so give it the same solid forest treatment as
+   the table/list buttons above. */
+.connector-card .link-btn { background: var(--forest); color: #f4f1e8; border-color: var(--forest); }
+
 /* Bold caution under the AML description — review the export before relying on it. */
 .reports-caution {
   margin: 0.7rem 0 0; padding: 0.55rem 0.8rem; max-width: 64ch;
