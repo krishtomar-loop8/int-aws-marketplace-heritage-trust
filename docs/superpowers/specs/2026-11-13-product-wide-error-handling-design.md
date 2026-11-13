@@ -188,6 +188,15 @@ Three related, backend-only fixes, grouped because each is individually small:
    `HttpError` string instead of the same plain-language translation. Thread the Phase 1 catalog
    (or `suggest_fix()`, once it calls the catalog) into the live search failure path so the same
    translation staff already see on the Integrations tab also appears when a search fails live.
+   **Carried forward from Phase 1's final review (resolved there, not re-opened):** before this
+   item routes a live-search error through `classify()`, (a) the `integration=None` path's wording
+   currently assumes a connector/health-probe caller throughout (e.g. "check the status page")
+   and needs non-connector-appropriate wording for this new caller; (b) `classify()`'s pattern
+   matching uses bare substrings (`"403"`, `"500"`, `"connection"`, etc.) carried over unchanged
+   from `suggest_fix()` for byte-parity reasons — demonstrated to misfire on free-form text that
+   happens to contain those digits (e.g. a request ID). Both need addressing as part of this item,
+   with tests using realistic free-form error text, not just the harness's own
+   `"<ExcType>: <message>"` format.
 
 **What's left to the builder:** confirm what the Graph SDK actually exposes for a 401 (a status
 code attribute, an exception subtype) at each of the four call sites before replacing the
@@ -218,7 +227,11 @@ Two related gaps in the synthesis path:
 **What's left to the builder:** where exactly in the live-search call path a Bedrock
 model-access error needs to be caught and classified (likely in `backend/search/orchestrator.py`
 or wherever the Bedrock client call itself is invoked — confirm); exact wording for the new
-missing-sections banner, following this codebase's existing banner-copy voice.
+missing-sections banner, following this codebase's existing banner-copy voice. **Carried forward
+from Phase 1's final review:** same two items as Phase 3 item 3 above (`integration=None`'s
+connector-assuming wording, and bare-substring pattern matching) apply here too, since Bedrock
+errors are exactly the kind of free-form, non-connector text `classify()` hasn't been exercised
+against yet.
 
 ### Phase 5 — Unattended-job failure visibility
 
