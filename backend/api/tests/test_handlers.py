@@ -1083,3 +1083,39 @@ def test_worker_without_a_config_client_uses_env(monkeypatch: pytest.MonkeyPatch
         "org_name": "Env Trust",
         "office_address": handlers.DEFAULT_ORG_OFFICE_ADDRESS,
     }
+
+
+def test_get_setup_status_route_not_dismissed_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.config import ConfigClient
+
+    deps, _ = install_deps(monkeypatch)
+    deps.setup_status = ConfigClient(client=_FakeSsmForConfig())
+    resp = handlers.handler(api_event("GET", "/setup-status"))
+    assert resp["statusCode"] == 200
+    assert json.loads(resp["body"]) == {"dismissed": False}
+
+
+def test_dismiss_setup_status_route_requires_admin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.config import ConfigClient
+
+    deps, _ = install_deps(monkeypatch)
+    deps.setup_status = ConfigClient(client=_FakeSsmForConfig())
+    resp = handlers.handler(api_event("POST", "/setup-status/dismiss"))
+    assert resp["statusCode"] == 403
+
+
+def test_dismiss_setup_status_route_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    from services.config import ConfigClient
+
+    deps, _ = install_deps(monkeypatch)
+    deps.setup_status = ConfigClient(client=_FakeSsmForConfig())
+    resp = handlers.handler(admin_api_event("POST", "/setup-status/dismiss"))
+    assert resp["statusCode"] == 200
+    assert json.loads(resp["body"]) == {"dismissed": True}
+    # Visible on a subsequent GET too (a fresh read, not just the POST's own echo).
+    get_resp = handlers.handler(api_event("GET", "/setup-status"))
+    assert json.loads(get_resp["body"]) == {"dismissed": True}

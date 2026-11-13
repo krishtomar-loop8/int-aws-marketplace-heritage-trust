@@ -119,6 +119,7 @@ class Deps:
     secrets: SecretsClient | None = None
     connectors_enabled: frozenset[str] = frozenset({"clio", "estateably", "quickbooks", "graph"})
     config: ConfigClient | None = None
+    setup_status: ConfigClient | None = None
 
 
 _DEPS: Deps | None = None  # cold-start cache / test injection point
@@ -158,6 +159,10 @@ def _build_deps(*, model_id: str | None = None) -> Deps:
 
     secrets = SecretsClient(boto3.client("secretsmanager", region_name=REGION))
     config = ConfigClient(boto3.client("ssm", region_name=REGION))
+    setup_status = ConfigClient(
+        boto3.client("ssm", region_name=REGION),
+        parameter_name="/aphrodite/setup/dismissed",
+    )
     estateably = EstateablyConnector(secrets) if "estateably" in connectors_enabled else None
     clio = ClioConnector(secrets) if "clio" in connectors_enabled else None
     graph = GraphConnector(secrets) if "graph" in connectors_enabled else None
@@ -303,6 +308,7 @@ def _build_deps(*, model_id: str | None = None) -> Deps:
         secrets=secrets,
         connectors_enabled=connectors_enabled,
         config=config,
+        setup_status=setup_status,
     )
 
 
@@ -697,6 +703,18 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
             detail=updates,
         )
         return _response(200, {"fields": config_admin.get_config(deps.config)})
+
+    # -- First-run setup wizard dismissal flag (GET visible to everyone,
+    # only the dismiss action is admin-gated) ---------------------------------
+    if method == "GET" and path.endswith("/setup-status"):
+        return _response(200, {"dismissed": bool(deps.setup_status.get().get("dismissed"))})
+
+    if method == "POST" and path.endswith("/setup-status/dismiss"):
+        forbidden = _require_admin(event)
+        if forbidden:
+            return forbidden
+        deps.setup_status.put({"dismissed": True})
+        return _response(200, {"dismissed": True})
 
     # -- Connector onboarding / reconnect (admin-gated credential writes) ---
     if method == "POST" and path.endswith("/connectors/estateably"):
