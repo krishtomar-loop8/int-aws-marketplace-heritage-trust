@@ -407,26 +407,54 @@ value of `{dismissed: true}` is what mock mode should behave as; for `mock`,
 initialize the `dismissed` state to `true` directly rather than fetching, the
 same way `ALL_CAPABILITIES` is the mock-mode default for capabilities).
 
-- [ ] **Step 2: Branch at the top of the component's render**
+- [ ] **Step 2: Branch inside the existing providers, not before them**
 
-Before the existing `return (<SearchJobsProvider>...)`, add:
+**Corrected during Task 4's implementation (plan defect caught before any
+code was written):** the wizard needs `useIntegrationsHealth()` — both
+directly (its own "already done" check) and indirectly, since
+`ConnectorCard`'s `ClioCard`/`EstateablyCard`/`GraphCard` all call that hook
+too. The hook throws with no `IntegrationsHealthProvider` above it in the
+tree. Returning the wizard *before* the existing
+`<SearchJobsProvider><IntegrationsHealthProvider>` wrap (as originally
+written here) would render it with no provider at all. A second,
+wizard-only provider instance was considered and rejected — it would mean a
+duplicate, separately-polling health fetch that gets thrown away the moment
+the wizard dismisses into the real shell, which already has its own
+instance.
+
+**Fix:** keep the existing provider wrap exactly as-is; branch *inside* it,
+in place of the `<div className="shell">...` content, not before the whole
+return:
 
 ```tsx
-if (!mock && !dismissed) {
-  if (!isAdmin) {
-    return <SetupPending onSignOut={onSignOut} />;
-  }
-  return (
-    <SetupWizard
-      apiBase={apiBase}
-      token={token}
-      capabilities={capabilities}
-      setupResult={setupResult}
-      onDismissed={() => setDismissed(true)}
-    />
-  );
-}
+return (
+  <SearchJobsProvider apiBase={apiBase} token={token} mock={mock}>
+    <IntegrationsHealthProvider apiBase={apiBase} token={token} mock={mock}>
+      {!mock && !dismissed ? (
+        !isAdmin ? (
+          <SetupPending onSignOut={onSignOut} />
+        ) : (
+          <SetupWizard
+            apiBase={apiBase}
+            token={token}
+            capabilities={capabilities}
+            setupResult={setupResult}
+            onDismissed={() => setDismissed(true)}
+          />
+        )
+      ) : (
+        <div className={`shell${collapsed ? " is-collapsed" : ""}`}>
+          {/* ...unchanged existing shell JSX... */}
+        </div>
+      )}
+    </IntegrationsHealthProvider>
+  </SearchJobsProvider>
+);
 ```
+
+`SetupWizard` (Task 4) calls `useIntegrationsHealth()` directly, exactly as
+originally briefed — it does **not** wrap itself in its own provider; this
+corrected structure guarantees one is already above it.
 
 Define `SetupPending` as a small inline component in this same file (it's a
 handful of lines — a centered message plus a sign-out button; no new file
