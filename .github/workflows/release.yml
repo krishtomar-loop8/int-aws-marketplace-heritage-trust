@@ -94,7 +94,8 @@ jobs:
           tar -C terraform --exclude='./.terraform' -cf - . | tar -C bundle/terraform -xf -
           cp -r frontend/dist bundle/frontend/dist
           cp installer/__init__.py installer/bundle_manifest.py installer/deploy.sh \
-            installer/retained-addresses.txt installer/preflight-models.txt bundle/installer/
+            installer/classify_apply_failure.sh installer/retained-addresses.txt \
+            installer/preflight-models.txt bundle/installer/
           python3 -m installer.bundle_manifest build bundle "$VERSION" "$GITHUB_SHA"
 
       - name: Package assets
