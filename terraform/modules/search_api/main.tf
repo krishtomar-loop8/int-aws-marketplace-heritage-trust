@@ -374,6 +374,18 @@ data "aws_iam_policy_document" "search" {
     actions   = ["ssm:PutParameter"]
     resources = ["arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/aphrodite/config/deployment"]
   }
+  # First-run setup wizard's dismissed flag: a single SSM parameter the
+  # GET/POST /setup-status routes read and write. Only search_api needs it.
+  statement {
+    sid       = "ReadSetupStatus"
+    actions   = ["ssm:GetParameter"]
+    resources = ["arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/aphrodite/setup/dismissed"]
+  }
+  statement {
+    sid       = "WriteSetupStatus"
+    actions   = ["ssm:PutParameter"]
+    resources = ["arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/aphrodite/setup/dismissed"]
+  }
 }
 
 resource "aws_iam_role_policy" "search" {
@@ -555,6 +567,8 @@ resource "aws_apigatewayv2_route" "routes" {
     "GET /capabilities",
     "GET /config",
     "PUT /config",
+    "GET /setup-status",
+    "POST /setup-status/dismiss",
     "POST /connectors/estateably",
     "POST /connectors/graph",
     "POST /connectors/clio/authorize-url",
