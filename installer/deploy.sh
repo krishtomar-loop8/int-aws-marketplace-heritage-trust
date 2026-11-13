@@ -57,6 +57,7 @@ require() {
   done
 }
 
+# shellcheck source=installer/classify_apply_failure.sh
 source installer/classify_apply_failure.sh
 
 # --- helpers ---------------------------------------------------------------------------------
@@ -283,9 +284,12 @@ do_apply() {
   # failing simple command regardless of the current set -e/+e state, exempting only a command
   # on the left of && / || (among other contexts) -- `set +e; ...; set -e` around it does NOT
   # suppress the trap, so `|| rc=$?` is used instead to capture the exit code without tripping it.
+  # Streamed through tee (rather than redirected and cat'd after) so the log is not lost if the
+  # build times out mid-apply; pipefail (set at the top of this script) makes $? reflect tf
+  # apply's own exit code rather than tee's, and the whole pipeline sits on the left of `||`
+  # here, so the ERR trap is exempted the same way a single redirected command would be.
   local rc=0
-  tf apply -input=false tfplan >"$WORK/apply.out" 2>&1 || rc=$?
-  cat "$WORK/apply.out"
+  tf apply -input=false tfplan 2>&1 | tee "$WORK/apply.out" || rc=$?
   if ((rc != 0)); then
     local classified
     classified=$(classify_apply_failure "$WORK/apply.out")
