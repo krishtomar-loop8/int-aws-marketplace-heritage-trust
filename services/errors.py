@@ -84,7 +84,8 @@ def classify(detail: str, *, integration: str | None = None) -> ClassifiedError:
             else "Access was denied (HTTP 403). Check the API scopes/permissions "
             "and that the app is still authorized on the service side.",
         )
-    if _has_status_code(d, "429") or any(k in d for k in ("throttl", "rate limit", "too many requests")):
+    rate_limit_markers = ("throttl", "rate limit", "too many requests")
+    if _has_status_code(d, "429") or any(k in d for k in rate_limit_markers):
         return ClassifiedError(
             ErrorClass.TRANSIENT,
             f"{provider.capitalize()} is rate-limiting requests (HTTP 429). This is usually "

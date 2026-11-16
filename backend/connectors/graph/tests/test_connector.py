@@ -332,7 +332,7 @@ def test_iter_drive_delta_403_whose_url_happens_to_mention_401_does_not_trigger_
 
 
 @responses.activate
-def test_download_drive_item_403_whose_url_happens_to_mention_401_does_not_trigger_a_refresh() -> None:
+def test_download_drive_item_403_whose_url_mentions_401_does_not_trigger_a_refresh() -> None:
     _add_token(token="tok-1")
     responses.add(
         responses.GET,
