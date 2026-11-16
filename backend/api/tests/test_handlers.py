@@ -313,8 +313,24 @@ def test_worker_records_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     deps.store.create("j1", "q", {"sub": "u"})
     out = handlers.handler({"worker": True, "job_id": "j1", "query": "q", "actor": None})
     assert out["ok"] is False
-    assert deps.store.get("j1")["status"] == "error"
-    assert "exploded" in deps.store.get("j1")["error"]
+    job = deps.store.get("j1")
+    assert job["status"] == "error"
+    assert job["error_is_friendly"] is True
+    assert "exploded" not in job["error"]  # raw exception text no longer shown
+
+
+def test_unhandled_route_exception_returns_500_not_a_crash(monkeypatch: pytest.MonkeyPatch) -> None:
+    deps, _ = install_deps(monkeypatch)
+
+    def boom(*a: Any, **k: Any) -> Any:
+        raise RuntimeError("boom")
+
+    deps.resolver.resolve = boom  # type: ignore[method-assign]
+    out = handlers.handler(api_event("POST", "/resolve", body={"query": "anything"}))
+    assert out["statusCode"] == 500
+    body = json.loads(out["body"])
+    assert "error" in body
+    assert "boom" not in body["error"]  # internal exception text is not leaked
 
 
 # -- AML admin (run now + monthly schedule) ---------------------------------
@@ -514,6 +530,20 @@ def test_health_probe_only_checks_enabled_connectors(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(harness_mod, "run_checks", fake_run_checks)
     handlers.handler({"health_probe": True})
     assert captured["enabled"] == frozenset({"clio"})
+
+
+def test_health_probe_setup_failure_does_not_crash(monkeypatch: pytest.MonkeyPatch) -> None:
+    import backend.harness as harness_mod
+
+    deps, _ = install_deps(monkeypatch)
+    deps.integrations = FakeIntegrations()  # type: ignore[assignment]
+
+    def boom(**_: Any) -> Any:
+        raise RuntimeError("secrets manager unreachable")
+
+    monkeypatch.setattr(harness_mod, "run_checks", boom)
+    result = handlers.handler({"health_probe": True})
+    assert result.get("ok") is False
 
 
 def test_aml_schedule_get_and_put(monkeypatch: pytest.MonkeyPatch) -> None:

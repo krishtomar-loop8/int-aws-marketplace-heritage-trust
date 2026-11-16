@@ -118,7 +118,7 @@ class GraphConnector:
         try:
             return self._http.get_json(url, headers=headers(), params=params)
         except HttpError as err:
-            if "401" in str(err):
+            if err.status == 401:
                 # Token may have been revoked/rotated; force-refresh once.
                 self._ensure_token(force=True)
                 return self._http.get_json(url, headers=headers(), params=params)
@@ -137,7 +137,7 @@ class GraphConnector:
                 params=params,
             )
         except HttpError as err:
-            if "401" in str(err):
+            if err.status == 401:
                 headers = {"Authorization": f"Bearer {self._ensure_token(force=True)}"}
                 yield from self._http.paginate(
                     url,
@@ -331,7 +331,7 @@ class GraphConnector:
             try:
                 data = self._http.get_json(page, headers=headers)
             except HttpError as err:
-                if first and "401" in str(err):
+                if first and err.status == 401:
                     headers = {"Authorization": f"Bearer {self._ensure_token(force=True)}"}
                     data = self._http.get_json(page, headers=headers)
                 else:
@@ -371,7 +371,7 @@ class GraphConnector:
         try:
             return self._http.get(url, headers=self._headers()).content
         except HttpError as err:
-            if "401" in str(err):
+            if err.status == 401:
                 headers = {"Authorization": f"Bearer {self._ensure_token(force=True)}"}
                 return self._http.get(url, headers=headers).content
             raise

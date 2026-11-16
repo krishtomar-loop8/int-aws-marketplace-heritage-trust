@@ -269,6 +269,89 @@ def test_404_raises_http_error() -> None:
         connector.get_user("missing")
 
 
+@responses.activate
+def test_a_403_whose_body_happens_to_mention_401_does_not_trigger_a_refresh() -> None:
+    # A real error unrelated to auth, whose message text happens to contain the
+    # digits "401" (here: a resource id that is part of the request URL, which
+    # HttpError's message always includes — e.g. a SharePoint/Graph id that
+    # happens to contain the digits "401") — must NOT be treated as a 401.
+    _add_token(token="tok-1")
+    responses.add(
+        responses.GET,
+        f"{BASE}/users/user-401",
+        json={"error": {"code": "Forbidden"}},
+        status=403,
+    )
+    connector, _ = _make_connector()
+    with pytest.raises(HttpError) as exc_info:
+        connector.get_user("user-401")
+    assert exc_info.value.status == 403
+    # Only the token fetch plus one data call were made — no 401-retry/refresh.
+    data_calls = [c for c in responses.calls if c.request.url == f"{BASE}/users/user-401"]
+    assert len(data_calls) == 1
+
+
+@responses.activate
+def test_paginate_403_whose_url_happens_to_mention_401_does_not_trigger_a_refresh() -> None:
+    _add_token(token="tok-1")
+    responses.add(
+        responses.GET,
+        f"{BASE}/sites/site-401/drive/root/children",
+        json={"error": {"code": "Forbidden"}},
+        status=403,
+    )
+    connector, _ = _make_connector()
+    with pytest.raises(HttpError) as exc_info:
+        connector.list_site_drive_items("site-401")
+    assert exc_info.value.status == 403
+    data_calls = [
+        c
+        for c in responses.calls
+        if c.request.url == f"{BASE}/sites/site-401/drive/root/children"
+    ]
+    assert len(data_calls) == 1
+
+
+@responses.activate
+def test_iter_drive_delta_403_whose_url_happens_to_mention_401_does_not_trigger_a_refresh() -> None:
+    _add_token(token="tok-1")
+    responses.add(
+        responses.GET,
+        f"{BASE}/sites/site-401/drive/root/delta",
+        json={"error": {"code": "Forbidden"}},
+        status=403,
+    )
+    connector, _ = _make_connector()
+    with pytest.raises(HttpError) as exc_info:
+        list(connector.iter_drive_delta("site-401"))
+    assert exc_info.value.status == 403
+    data_calls = [
+        c for c in responses.calls if c.request.url == f"{BASE}/sites/site-401/drive/root/delta"
+    ]
+    assert len(data_calls) == 1
+
+
+@responses.activate
+def test_download_drive_item_403_whose_url_mentions_401_does_not_trigger_a_refresh() -> None:
+    _add_token(token="tok-1")
+    responses.add(
+        responses.GET,
+        f"{BASE}/sites/site-1/drive/items/item-401/content",
+        json={"error": {"code": "Forbidden"}},
+        status=403,
+    )
+    connector, _ = _make_connector()
+    with pytest.raises(HttpError) as exc_info:
+        connector.download_drive_item("site-1", "item-401")
+    assert exc_info.value.status == 403
+    data_calls = [
+        c
+        for c in responses.calls
+        if c.request.url == f"{BASE}/sites/site-1/drive/items/item-401/content"
+    ]
+    assert len(data_calls) == 1
+
+
 # -- crawler helpers: delta enumeration + content download -------------
 
 

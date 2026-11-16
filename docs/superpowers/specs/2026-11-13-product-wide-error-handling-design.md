@@ -233,6 +233,34 @@ connector-assuming wording, and bare-substring pattern matching) apply here too,
 errors are exactly the kind of free-form, non-connector text `classify()` hasn't been exercised
 against yet.
 
+**Carried forward from Phase 3's final review (an accepted, temporary regression — not a defect
+to re-litigate, a design constraint this phase must resolve):** Phase 3 made `_run_worker`
+classify every search-job failure and set `error_is_friendly: true` unconditionally, so the
+frontend's `friendlyError()` now trusts `classify()`'s message verbatim instead of falling back to
+its own keyword-matched copy. This means `friendlyError()`'s AI-specific branches ("The AI service
+was busy…", "The AI service had a problem generating this summary…") are **currently
+unreachable** for any search-job failure, including today's Bedrock errors — `_run_worker` builds
+`classify()`'s input as `f"{type(exc).__name__}: {exc}"`, and a `services/llm.py` `LLMError`
+(e.g. `"LLMError: Bedrock Converse failed (AccessDeniedException)"`) doesn't match any of
+`classify()`'s current patterns, so it falls through to the generic `UNKNOWN` message — vaguer
+than the AI-specific copy staff saw before Phase 3, and a `ThrottlingException` now produces a
+message that cites "HTTP 429" even though no HTTP status actually appeared in the original error.
+This phase must close that gap, specifically:
+- Add a Bedrock-aware branch to `classify()` (or a sibling function this phase introduces) that
+  recognizes `LLMError`'s message shape and known Bedrock exception codes
+  (`AccessDeniedException` → model-not-enabled/permanent, matching item 1 above;
+  `ThrottlingException`/`ValidationException` → their own correct classes) — **this branch must be
+  checked before the generic throttle/timeout/5xx branches**, or be explicitly gated on a
+  "bedrock"/`LLMError` marker, so a Bedrock-specific code doesn't fall through to a generic
+  HTTP-flavored message that cites a status code that was never actually present.
+- Decide explicitly whether a Bedrock error that still lands in `ErrorClass.UNKNOWN` (unrecognized
+  Bedrock exception code) should keep `error_is_friendly: true` (trusting `classify()`'s generic
+  message as-is) or signal back to the frontend that it should fall back to `friendlyError()`'s
+  AI-aware keyword matching instead — state this as this phase's own call, the same way other
+  phases have stated theirs, since the mechanism (`error_is_friendly`) doesn't currently support a
+  third "use the old heuristic" state and this phase may need to add one, or may decide the new
+  Bedrock-aware classification makes the old heuristic branches dead code worth removing instead.
+
 ### Phase 5 — Unattended-job failure visibility
 
 Three jobs, one theme — a scheduled job must never fail with zero trace in the portal:

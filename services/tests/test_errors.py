@@ -65,3 +65,41 @@ def test_classify_without_integration_never_mentions_a_specific_connector() -> N
     ):
         result = classify(detail)
         assert "quickbooks" not in result.message.lower()
+
+
+def test_word_boundary_prevents_request_id_false_positive() -> None:
+    # "403" appears inside a request id, not as the actual HTTP status.
+    result = classify("ValidationException: bad input (RequestId: a403f-01-02)")
+    assert result.error_class != ErrorClass.PERMANENT
+
+def test_word_boundary_prevents_matter_number_false_positive() -> None:
+    result = classify("ValueError: matter 1500 not found")
+    assert result.error_class != ErrorClass.TRANSIENT
+
+def test_word_boundary_still_matches_a_real_403() -> None:
+    result = classify("HttpError: 403 Forbidden")
+    assert result.error_class == ErrorClass.PERMANENT
+
+def test_word_boundary_still_matches_a_real_401_auth_marker() -> None:
+    result = classify("HttpError: 401 Unauthorized")
+    assert result.error_class == ErrorClass.NEEDS_REAUTH
+
+def test_url_embedded_digits_do_not_preempt_the_real_status_code() -> None:
+    result = classify(
+        "HttpError: GET https://app.clio.com/api/v4/matters/401.json failed: 503"
+    )
+    assert result.error_class == ErrorClass.TRANSIENT  # the real status, 503, wins
+
+def test_generic_message_never_assumes_a_source_system_or_secrets_manager() -> None:
+    for detail in (
+        "HttpError: 402 Payment Required",
+        "HttpError: 403 Forbidden",
+        "HttpError: 429 Too Many Requests",
+        "ReadTimeout: read timed out",
+        "HttpError: 503 ServiceUnavailable",
+        "ValueError: something odd",
+    ):
+        msg = classify(detail).message.lower()
+        assert "source system" not in msg
+        assert "secrets manager" not in msg
+        assert "next check" not in msg

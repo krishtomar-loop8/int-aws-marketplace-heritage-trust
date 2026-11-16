@@ -41,6 +41,7 @@ from backend.search.quick_answers import QuickAnswerService
 from backend.search.resolve import MatterResolver
 from backend.search.synthesize import MatterSynthesizer
 from services.config import ConfigClient
+from services.errors import classify
 from services.logging import get_logger
 from services.secrets import SecretsClient
 
@@ -413,409 +414,421 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
     http = event.get("requestContext", {}).get("http", {})
     method, path = http.get("method", ""), http.get("path", "")
 
-    if method == "POST" and path.endswith("/resolve"):
-        body = _body(event)
-        query = body.get("query", "").strip()
-        if not query:
-            return _response(400, {"error": "missing 'query'"})
-        return _response(200, run_resolve(query, resolver=deps.resolver, scope=_scope(body)))
+    try:
+        if method == "POST" and path.endswith("/resolve"):
+            body = _body(event)
+            query = body.get("query", "").strip()
+            if not query:
+                return _response(400, {"error": "missing 'query'"})
+            return _response(200, run_resolve(query, resolver=deps.resolver, scope=_scope(body)))
 
-    if method == "POST" and path.endswith("/search"):
-        body = _body(event)
-        query = body.get("query", "").strip()
-        if not query:
-            return _response(400, {"error": "missing 'query'"})
-        # Optional: a candidate the UI already picked from a prior disambiguation,
-        # so the worker resolves to that matter directly instead of re-matching.
-        selection = body.get("selection") if isinstance(body.get("selection"), dict) else None
-        # Optional: force the full status-file synthesis (skip Tier-0 quick answers),
-        # e.g. the "view full status file" escalation from a quick answer.
-        full = bool(body.get("full"))
-        # Optional: "clio" skips Estateably in resolution so an old Clio + SharePoint
-        # matter (no Estateably record) surfaces instead of being outranked.
-        scope = _scope(body)
-        job_id = uuid.uuid4().hex
-        actor = _actor(event)
-        deps.store.create(job_id, query, actor)
-        deps.self_invoke(
-            {
-                "worker": True,
-                "job_id": job_id,
-                "query": query,
-                "actor": actor,
-                "selection": selection,
-                "full": full,
-                "scope": scope,
+        if method == "POST" and path.endswith("/search"):
+            body = _body(event)
+            query = body.get("query", "").strip()
+            if not query:
+                return _response(400, {"error": "missing 'query'"})
+            # Optional: a candidate the UI already picked from a prior disambiguation,
+            # so the worker resolves to that matter directly instead of re-matching.
+            selection = body.get("selection") if isinstance(body.get("selection"), dict) else None
+            # Optional: force the full status-file synthesis (skip Tier-0 quick answers),
+            # e.g. the "view full status file" escalation from a quick answer.
+            full = bool(body.get("full"))
+            # Optional: "clio" skips Estateably in resolution so an old Clio + SharePoint
+            # matter (no Estateably record) surfaces instead of being outranked.
+            scope = _scope(body)
+            job_id = uuid.uuid4().hex
+            actor = _actor(event)
+            deps.store.create(job_id, query, actor)
+            deps.self_invoke(
+                {
+                    "worker": True,
+                    "job_id": job_id,
+                    "query": query,
+                    "actor": actor,
+                    "selection": selection,
+                    "full": full,
+                    "scope": scope,
+                }
+            )
+            return _response(202, {"job_id": job_id, "status": "pending"})
+
+        # Per-user search history (background/history/bell). Keyed by the caller's
+        # Cognito sub from the JWT — never a client-supplied value.
+        if method == "GET" and path.endswith("/search"):
+            sub = _actor(event).get("sub")
+            searches = deps.store.list_for_actor(sub) if sub else []
+            return _response(200, {"searches": searches})
+
+        # Connector-health banner: source errors from the caller's most recent full
+        # search (e.g. a dead QuickBooks token) — surfaced in-app so degradation isn't
+        # silent. No email/SNS; the SPA polls this and shows a dismissible banner.
+        if method == "GET" and path.endswith("/connector-health"):
+            sub = _actor(event).get("sub")
+            errors = deps.store.latest_source_errors(sub) if sub else []
+            return _response(200, {"source_errors": errors})
+
+        if method == "GET" and "/search/" in path:
+            job_id = (event.get("pathParameters") or {}).get("jobId", "")
+            job = deps.store.get(job_id)
+            if job is None:
+                return _response(404, {"error": "job not found"})
+            # Per-user isolation: only the owner may read a job. Return 404 (not 403)
+            # so a job's existence isn't disclosed to other users.
+            owner = job.get("actor_sub")
+            if owner and owner != _actor(event).get("sub"):
+                return _response(404, {"error": "job not found"})
+            return _response(200, job)
+
+        # Staff can clear a stale/errored search from their own history list. The
+        # chain-of-custody audit trail (search.completed, emitted when the search
+        # itself ran) is untouched — this only removes the convenience list entry.
+        if method == "DELETE" and "/search/" in path:
+            job_id = (event.get("pathParameters") or {}).get("jobId", "")
+            job = deps.store.get(job_id)
+            if job is None:
+                return _response(404, {"error": "job not found"})
+            owner = job.get("actor_sub")
+            if owner and owner != _actor(event).get("sub"):
+                return _response(404, {"error": "job not found"})
+            deps.store.delete(job_id)
+            return _response(200, {"deleted": job_id})
+
+        if method == "GET" and path.endswith("/reports/download"):
+            if deps.reports is None:
+                return _response(503, {"error": "reports not configured"})
+            key = (event.get("queryStringParameters") or {}).get("key", "")
+            try:
+                url = deps.reports.download_url(key)
+            except ReportAccessError:
+                return _response(400, {"error": "invalid report key"})
+            _record(deps, event, "download", f"Downloaded quarterly report {key}", target=key)
+            return _response(200, {"url": url})
+
+        if method == "GET" and path.endswith("/reports"):
+            if deps.reports is None:
+                return _response(503, {"error": "reports not configured"})
+            return _response(200, {"reports": deps.reports.list()})
+
+        if method == "GET" and path.endswith("/aml-exports/download"):
+            if deps.aml_exports is None:
+                return _response(503, {"error": "aml exports not configured"})
+            key = (event.get("queryStringParameters") or {}).get("key", "")
+            try:
+                url = deps.aml_exports.download_url(key)
+            except AmlExportAccessError:
+                return _response(400, {"error": "invalid export key"})
+            _record(deps, event, "download", f"Downloaded AML export workbook {key}", target=key)
+            return _response(200, {"url": url})
+
+        if method == "GET" and path.endswith("/aml-exports"):
+            if deps.aml_exports is None:
+                return _response(503, {"error": "aml exports not configured"})
+            return _response(200, {"exports": deps.aml_exports.list()})
+
+        # On-demand "run now" for the AML export (async-invoke; the SPA polls the list).
+        if method == "POST" and path.endswith("/aml-exports/generate"):
+            if deps.aml_trigger is None:
+                return _response(503, {"error": "aml generation not configured"})
+            deps.aml_trigger.run()
+            _record(deps, event, "aml.run", "Ran the AML export on demand")
+            return _response(202, {"status": "generating"})
+
+        # Self-serve monthly schedule for the AML export (read + update the schedule).
+        if method == "GET" and path.endswith("/aml-exports/schedule"):
+            if deps.aml_schedule is None:
+                return _response(503, {"error": "aml schedule not configured"})
+            return _response(200, deps.aml_schedule.get())
+
+        if method == "PUT" and path.endswith("/aml-exports/schedule"):
+            if deps.aml_schedule is None:
+                return _response(503, {"error": "aml schedule not configured"})
+            body = _body(event)
+            try:
+                state = deps.aml_schedule.update(
+                    enabled=bool(body.get("enabled")),
+                    day_of_month=body.get("day_of_month"),
+                    hour=body.get("hour"),
+                    minute=body.get("minute"),
+                )
+            except ScheduleError as exc:
+                return _response(400, {"error": str(exc)})
+            if state.get("enabled"):
+                when = (
+                    f"day {state.get('day_of_month')} at "
+                    f"{state.get('hour', 0):02d}:{state.get('minute', 0):02d}"
+                )
+                summary = f"Set the AML export schedule to run monthly on {when}"
+            else:
+                summary = "Turned off the automatic AML export schedule"
+            _record(deps, event, "aml.schedule", summary, detail=state)
+            return _response(200, state)
+
+        if method == "GET" and path.endswith("/matters"):
+            if deps.matters is None:
+                return _response(503, {"error": "matters not configured"})
+            return _response(200, {"matters": deps.matters.list_open()})
+
+        if method == "POST" and path.endswith("/reports/generate"):
+            if deps.quarterly is None:
+                return _response(503, {"error": "generation not configured"})
+            body = _body(event)
+            matter_id = str(body.get("matter_id", "")).strip()
+            try:
+                year, quarter = int(body["year"]), int(body["quarter"])
+            except (KeyError, TypeError, ValueError):
+                return _response(
+                    400, {"error": "missing/invalid 'matter_id', 'year', or 'quarter'"}
+                )
+            if not matter_id or quarter not in (1, 2, 3, 4):
+                return _response(
+                    400, {"error": "missing/invalid 'matter_id', 'year', or 'quarter'"}
+                )
+            deps.quarterly.generate(matter_id, year, quarter)
+            _record(
+                deps,
+                event,
+                "report.generate",
+                f"Generated a Q{quarter} {year} quarterly report draft",
+                target=matter_id,
+                detail={"matter_id": matter_id, "year": year, "quarter": quarter},
+            )
+            return _response(202, {"status": "generating", "matter_id": matter_id})
+
+        # -- Sanction Screener (D6 companion) -----------------------------------
+        if method == "POST" and path.endswith("/screener/screen"):
+            if deps.screener is None:
+                return _response(503, {"error": "screener not configured"})
+            raw = event.get("body") or ""
+            content = base64.b64decode(raw) if event.get("isBase64Encoded") else raw.encode("utf-8")
+            headers = event.get("headers") or {}
+            filename = headers.get("x-file-name") or headers.get("X-File-Name") or ""
+            try:
+                result = deps.screener.screen(content, filename)
+            except ScreenerError as exc:
+                return _response(400, {"error": str(exc)})
+            screened = result.get("total_screened", 0)
+            matches = result.get("total_matches", 0)
+            _record(
+                deps,
+                event,
+                "screener.screen",
+                f"Screened {screened} name(s) against the sanctions watchlists "
+                f"({matches} potential match(es))",
+                target=filename or None,
+                detail={"total_screened": screened, "total_matches": matches},
+            )
+            return _response(200, result)
+
+        if method == "POST" and path.endswith("/screener/certificate"):
+            if deps.screener is None:
+                return _response(503, {"error": "screener not configured"})
+            try:
+                cert = deps.screener.certificate(_body(event), _actor(event))
+            except ScreenerError as exc:
+                return _response(400, {"error": str(exc)})
+            _record(
+                deps,
+                event,
+                "screener.certificate",
+                "Issued a Certificate of Search",
+                target=cert.get("key"),
+            )
+            return _response(200, cert)
+
+        if method == "GET" and path.endswith("/screener/certificates/download"):
+            if deps.screener is None:
+                return _response(503, {"error": "screener not configured"})
+            key = (event.get("queryStringParameters") or {}).get("key", "")
+            try:
+                url = deps.screener.download_url(key)
+            except ScreenerAccessError:
+                return _response(400, {"error": "invalid certificate key"})
+            _record(deps, event, "download", "Downloaded a Certificate of Search", target=key)
+            return _response(200, {"url": url})
+
+        if method == "GET" and path.endswith("/screener/certificates"):
+            if deps.screener is None:
+                return _response(503, {"error": "screener not configured"})
+            return _response(200, {"certificates": deps.screener.list()})
+
+        if method == "DELETE" and path.endswith("/screener/certificates"):
+            if deps.screener is None:
+                return _response(503, {"error": "screener not configured"})
+            key = (event.get("queryStringParameters") or {}).get("key", "")
+            try:
+                removed = deps.screener.delete(key)
+            except ScreenerAccessError:
+                return _response(400, {"error": "invalid certificate key"})
+            _record(deps, event, "screener.delete", "Removed a Certificate of Search", target=key)
+            return _response(200, {"deleted": key, "removed": removed})
+
+        # -- Activity Logs (chain-of-custody audit trail) -----------------------
+        if method == "GET" and path.endswith("/activity"):
+            if deps.activity is None:
+                return _response(503, {"error": "activity log not configured"})
+            limit = int((event.get("queryStringParameters") or {}).get("limit") or 500)
+            return _response(200, {"activity": deps.activity.list(limit)})
+
+        # -- Integrations health (live connector status + downtime log) ---------
+        if method == "GET" and path.endswith("/integrations"):
+            if deps.integrations is None:
+                return _response(503, {"error": "integration health not configured"})
+            return _response(200, deps.integrations.snapshot(enabled=deps.connectors_enabled))
+
+        if method == "GET" and path.endswith("/capabilities"):
+            connectors = {
+                name: name in deps.connectors_enabled
+                for name in ("clio", "estateably", "quickbooks", "graph")
             }
-        )
-        return _response(202, {"job_id": job_id, "status": "pending"})
+            modules = {
+                "quarterly_reports": deps.reports is not None,
+                "aml_export": deps.aml_exports is not None,
+                "sanction_screener": deps.screener is not None,
+            }
+            return _response(200, {"modules": modules, "connectors": connectors})
 
-    # Per-user search history (background/history/bell). Keyed by the caller's
-    # Cognito sub from the JWT — never a client-supplied value.
-    if method == "GET" and path.endswith("/search"):
-        sub = _actor(event).get("sub")
-        searches = deps.store.list_for_actor(sub) if sub else []
-        return _response(200, {"searches": searches})
+        # -- Deployment config (business-config tab; GET is visible to everyone,
+        # only PUT is admin-gated) -----------------------------------------------
+        if method == "GET" and path.endswith("/config"):
+            return _response(200, {"fields": config_admin.get_config(deps.config)})
 
-    # Connector-health banner: source errors from the caller's most recent full
-    # search (e.g. a dead QuickBooks token) — surfaced in-app so degradation isn't
-    # silent. No email/SNS; the SPA polls this and shows a dismissible banner.
-    if method == "GET" and path.endswith("/connector-health"):
-        sub = _actor(event).get("sub")
-        errors = deps.store.latest_source_errors(sub) if sub else []
-        return _response(200, {"source_errors": errors})
-
-    if method == "GET" and "/search/" in path:
-        job_id = (event.get("pathParameters") or {}).get("jobId", "")
-        job = deps.store.get(job_id)
-        if job is None:
-            return _response(404, {"error": "job not found"})
-        # Per-user isolation: only the owner may read a job. Return 404 (not 403)
-        # so a job's existence isn't disclosed to other users.
-        owner = job.get("actor_sub")
-        if owner and owner != _actor(event).get("sub"):
-            return _response(404, {"error": "job not found"})
-        return _response(200, job)
-
-    # Staff can clear a stale/errored search from their own history list. The
-    # chain-of-custody audit trail (search.completed, emitted when the search
-    # itself ran) is untouched — this only removes the convenience list entry.
-    if method == "DELETE" and "/search/" in path:
-        job_id = (event.get("pathParameters") or {}).get("jobId", "")
-        job = deps.store.get(job_id)
-        if job is None:
-            return _response(404, {"error": "job not found"})
-        owner = job.get("actor_sub")
-        if owner and owner != _actor(event).get("sub"):
-            return _response(404, {"error": "job not found"})
-        deps.store.delete(job_id)
-        return _response(200, {"deleted": job_id})
-
-    if method == "GET" and path.endswith("/reports/download"):
-        if deps.reports is None:
-            return _response(503, {"error": "reports not configured"})
-        key = (event.get("queryStringParameters") or {}).get("key", "")
-        try:
-            url = deps.reports.download_url(key)
-        except ReportAccessError:
-            return _response(400, {"error": "invalid report key"})
-        _record(deps, event, "download", f"Downloaded quarterly report {key}", target=key)
-        return _response(200, {"url": url})
-
-    if method == "GET" and path.endswith("/reports"):
-        if deps.reports is None:
-            return _response(503, {"error": "reports not configured"})
-        return _response(200, {"reports": deps.reports.list()})
-
-    if method == "GET" and path.endswith("/aml-exports/download"):
-        if deps.aml_exports is None:
-            return _response(503, {"error": "aml exports not configured"})
-        key = (event.get("queryStringParameters") or {}).get("key", "")
-        try:
-            url = deps.aml_exports.download_url(key)
-        except AmlExportAccessError:
-            return _response(400, {"error": "invalid export key"})
-        _record(deps, event, "download", f"Downloaded AML export workbook {key}", target=key)
-        return _response(200, {"url": url})
-
-    if method == "GET" and path.endswith("/aml-exports"):
-        if deps.aml_exports is None:
-            return _response(503, {"error": "aml exports not configured"})
-        return _response(200, {"exports": deps.aml_exports.list()})
-
-    # On-demand "run now" for the AML export (async-invoke; the SPA polls the list).
-    if method == "POST" and path.endswith("/aml-exports/generate"):
-        if deps.aml_trigger is None:
-            return _response(503, {"error": "aml generation not configured"})
-        deps.aml_trigger.run()
-        _record(deps, event, "aml.run", "Ran the AML export on demand")
-        return _response(202, {"status": "generating"})
-
-    # Self-serve monthly schedule for the AML export (read + update the schedule).
-    if method == "GET" and path.endswith("/aml-exports/schedule"):
-        if deps.aml_schedule is None:
-            return _response(503, {"error": "aml schedule not configured"})
-        return _response(200, deps.aml_schedule.get())
-
-    if method == "PUT" and path.endswith("/aml-exports/schedule"):
-        if deps.aml_schedule is None:
-            return _response(503, {"error": "aml schedule not configured"})
-        body = _body(event)
-        try:
-            state = deps.aml_schedule.update(
-                enabled=bool(body.get("enabled")),
-                day_of_month=body.get("day_of_month"),
-                hour=body.get("hour"),
-                minute=body.get("minute"),
+        if method == "PUT" and path.endswith("/config"):
+            forbidden = _require_admin(event)
+            if forbidden:
+                return forbidden
+            updates = _body(event)
+            try:
+                config_admin.put_config(deps.config, updates)
+            except config_admin.ConfigValidationError as exc:
+                return _response(400, {"error": str(exc)})
+            _record(
+                deps,
+                event,
+                "config.update",
+                f"Updated deployment config: {', '.join(sorted(updates))}",
+                detail=updates,
             )
-        except ScheduleError as exc:
-            return _response(400, {"error": str(exc)})
-        if state.get("enabled"):
-            when = (
-                f"day {state.get('day_of_month')} at "
-                f"{state.get('hour', 0):02d}:{state.get('minute', 0):02d}"
+            return _response(200, {"fields": config_admin.get_config(deps.config)})
+
+        # -- First-run setup wizard dismissal flag (GET visible to everyone,
+        # only the dismiss action is admin-gated) ---------------------------------
+        if method == "GET" and path.endswith("/setup-status"):
+            # Re-reads the store (refresh=True): a dismiss only updates the cache of
+            # the container that served it, so another warm container would
+            # otherwise report its own stale copy (same reasoning as get_config).
+            return _response(
+                200, {"dismissed": bool(deps.setup_status.get(refresh=True).get("dismissed"))}
             )
-            summary = f"Set the AML export schedule to run monthly on {when}"
-        else:
-            summary = "Turned off the automatic AML export schedule"
-        _record(deps, event, "aml.schedule", summary, detail=state)
-        return _response(200, state)
 
-    if method == "GET" and path.endswith("/matters"):
-        if deps.matters is None:
-            return _response(503, {"error": "matters not configured"})
-        return _response(200, {"matters": deps.matters.list_open()})
+        if method == "POST" and path.endswith("/setup-status/dismiss"):
+            forbidden = _require_admin(event)
+            if forbidden:
+                return forbidden
+            deps.setup_status.put({"dismissed": True})
+            _record(deps, event, "setup.dismiss", "Dismissed the first-run setup wizard")
+            return _response(200, {"dismissed": True})
 
-    if method == "POST" and path.endswith("/reports/generate"):
-        if deps.quarterly is None:
-            return _response(503, {"error": "generation not configured"})
-        body = _body(event)
-        matter_id = str(body.get("matter_id", "")).strip()
-        try:
-            year, quarter = int(body["year"]), int(body["quarter"])
-        except (KeyError, TypeError, ValueError):
-            return _response(400, {"error": "missing/invalid 'matter_id', 'year', or 'quarter'"})
-        if not matter_id or quarter not in (1, 2, 3, 4):
-            return _response(400, {"error": "missing/invalid 'matter_id', 'year', or 'quarter'"})
-        deps.quarterly.generate(matter_id, year, quarter)
-        _record(
-            deps,
-            event,
-            "report.generate",
-            f"Generated a Q{quarter} {year} quarterly report draft",
-            target=matter_id,
-            detail={"matter_id": matter_id, "year": year, "quarter": quarter},
-        )
-        return _response(202, {"status": "generating", "matter_id": matter_id})
+        # -- Connector onboarding / reconnect (admin-gated credential writes) ---
+        if method == "POST" and path.endswith("/connectors/estateably"):
+            if "estateably" not in deps.connectors_enabled:
+                return _response(503, {"error": "estateably disabled for this deployment"})
+            forbidden = _require_admin(event)
+            if forbidden:
+                return forbidden
+            try:
+                result = connectors_admin.connect_estateably(
+                    deps.secrets, _body(event), integrations=deps.integrations
+                )
+            except connectors_admin.ConnectorValidationError as exc:
+                return _response(400, {"error": str(exc)})
+            _record(deps, event, "connector.connect", "Connected Estateably", target="estateably")
+            return _response(200, result)
 
-    # -- Sanction Screener (D6 companion) -----------------------------------
-    if method == "POST" and path.endswith("/screener/screen"):
-        if deps.screener is None:
-            return _response(503, {"error": "screener not configured"})
-        raw = event.get("body") or ""
-        content = base64.b64decode(raw) if event.get("isBase64Encoded") else raw.encode("utf-8")
-        headers = event.get("headers") or {}
-        filename = headers.get("x-file-name") or headers.get("X-File-Name") or ""
-        try:
-            result = deps.screener.screen(content, filename)
-        except ScreenerError as exc:
-            return _response(400, {"error": str(exc)})
-        screened = result.get("total_screened", 0)
-        matches = result.get("total_matches", 0)
-        _record(
-            deps,
-            event,
-            "screener.screen",
-            f"Screened {screened} name(s) against the sanctions watchlists "
-            f"({matches} potential match(es))",
-            target=filename or None,
-            detail={"total_screened": screened, "total_matches": matches},
-        )
-        return _response(200, result)
+        if method == "POST" and path.endswith("/connectors/graph"):
+            if "graph" not in deps.connectors_enabled:
+                return _response(503, {"error": "graph disabled for this deployment"})
+            forbidden = _require_admin(event)
+            if forbidden:
+                return forbidden
+            try:
+                result = connectors_admin.connect_graph(
+                    deps.secrets, _body(event), integrations=deps.integrations
+                )
+            except connectors_admin.ConnectorValidationError as exc:
+                return _response(400, {"error": str(exc)})
+            _record(deps, event, "connector.connect", "Connected Microsoft Graph", target="graph")
+            return _response(200, result)
 
-    if method == "POST" and path.endswith("/screener/certificate"):
-        if deps.screener is None:
-            return _response(503, {"error": "screener not configured"})
-        try:
-            cert = deps.screener.certificate(_body(event), _actor(event))
-        except ScreenerError as exc:
-            return _response(400, {"error": str(exc)})
-        _record(
-            deps,
-            event,
-            "screener.certificate",
-            "Issued a Certificate of Search",
-            target=cert.get("key"),
-        )
-        return _response(200, cert)
+        if method == "POST" and path.endswith("/connectors/clio/authorize-url"):
+            if "clio" not in deps.connectors_enabled:
+                return _response(503, {"error": "clio disabled for this deployment"})
+            forbidden = _require_admin(event)
+            if forbidden:
+                return forbidden
+            try:
+                result = connectors_admin.clio_authorize_url(_body(event))
+            except connectors_admin.ConnectorValidationError as exc:
+                return _response(400, {"error": str(exc)})
+            return _response(200, result)
 
-    if method == "GET" and path.endswith("/screener/certificates/download"):
-        if deps.screener is None:
-            return _response(503, {"error": "screener not configured"})
-        key = (event.get("queryStringParameters") or {}).get("key", "")
-        try:
-            url = deps.screener.download_url(key)
-        except ScreenerAccessError:
-            return _response(400, {"error": "invalid certificate key"})
-        _record(deps, event, "download", "Downloaded a Certificate of Search", target=key)
-        return _response(200, {"url": url})
+        if method == "POST" and path.endswith("/connectors/clio/exchange"):
+            if "clio" not in deps.connectors_enabled:
+                return _response(503, {"error": "clio disabled for this deployment"})
+            forbidden = _require_admin(event)
+            if forbidden:
+                return forbidden
+            try:
+                result = connectors_admin.clio_exchange(
+                    deps.secrets, _body(event), integrations=deps.integrations
+                )
+            except connectors_admin.ConnectorValidationError as exc:
+                return _response(400, {"error": str(exc)})
+            _record(deps, event, "connector.connect", "Connected Clio", target="clio")
+            return _response(200, result)
 
-    if method == "GET" and path.endswith("/screener/certificates"):
-        if deps.screener is None:
-            return _response(503, {"error": "screener not configured"})
-        return _response(200, {"certificates": deps.screener.list()})
-
-    if method == "DELETE" and path.endswith("/screener/certificates"):
-        if deps.screener is None:
-            return _response(503, {"error": "screener not configured"})
-        key = (event.get("queryStringParameters") or {}).get("key", "")
-        try:
-            removed = deps.screener.delete(key)
-        except ScreenerAccessError:
-            return _response(400, {"error": "invalid certificate key"})
-        _record(deps, event, "screener.delete", "Removed a Certificate of Search", target=key)
-        return _response(200, {"deleted": key, "removed": removed})
-
-    # -- Activity Logs (chain-of-custody audit trail) -----------------------
-    if method == "GET" and path.endswith("/activity"):
-        if deps.activity is None:
-            return _response(503, {"error": "activity log not configured"})
-        limit = int((event.get("queryStringParameters") or {}).get("limit") or 500)
-        return _response(200, {"activity": deps.activity.list(limit)})
-
-    # -- Integrations health (live connector status + downtime log) ---------
-    if method == "GET" and path.endswith("/integrations"):
-        if deps.integrations is None:
-            return _response(503, {"error": "integration health not configured"})
-        return _response(200, deps.integrations.snapshot(enabled=deps.connectors_enabled))
-
-    if method == "GET" and path.endswith("/capabilities"):
-        connectors = {
-            name: name in deps.connectors_enabled
-            for name in ("clio", "estateably", "quickbooks", "graph")
-        }
-        modules = {
-            "quarterly_reports": deps.reports is not None,
-            "aml_export": deps.aml_exports is not None,
-            "sanction_screener": deps.screener is not None,
-        }
-        return _response(200, {"modules": modules, "connectors": connectors})
-
-    # -- Deployment config (business-config tab; GET is visible to everyone,
-    # only PUT is admin-gated) -----------------------------------------------
-    if method == "GET" and path.endswith("/config"):
-        return _response(200, {"fields": config_admin.get_config(deps.config)})
-
-    if method == "PUT" and path.endswith("/config"):
-        forbidden = _require_admin(event)
-        if forbidden:
-            return forbidden
-        updates = _body(event)
-        try:
-            config_admin.put_config(deps.config, updates)
-        except config_admin.ConfigValidationError as exc:
-            return _response(400, {"error": str(exc)})
-        _record(
-            deps,
-            event,
-            "config.update",
-            f"Updated deployment config: {', '.join(sorted(updates))}",
-            detail=updates,
-        )
-        return _response(200, {"fields": config_admin.get_config(deps.config)})
-
-    # -- First-run setup wizard dismissal flag (GET visible to everyone,
-    # only the dismiss action is admin-gated) ---------------------------------
-    if method == "GET" and path.endswith("/setup-status"):
-        # Re-reads the store (refresh=True): a dismiss only updates the cache of
-        # the container that served it, so another warm container would
-        # otherwise report its own stale copy (same reasoning as get_config).
-        return _response(
-            200, {"dismissed": bool(deps.setup_status.get(refresh=True).get("dismissed"))}
-        )
-
-    if method == "POST" and path.endswith("/setup-status/dismiss"):
-        forbidden = _require_admin(event)
-        if forbidden:
-            return forbidden
-        deps.setup_status.put({"dismissed": True})
-        _record(deps, event, "setup.dismiss", "Dismissed the first-run setup wizard")
-        return _response(200, {"dismissed": True})
-
-    # -- Connector onboarding / reconnect (admin-gated credential writes) ---
-    if method == "POST" and path.endswith("/connectors/estateably"):
-        if "estateably" not in deps.connectors_enabled:
-            return _response(503, {"error": "estateably disabled for this deployment"})
-        forbidden = _require_admin(event)
-        if forbidden:
-            return forbidden
-        try:
-            result = connectors_admin.connect_estateably(
-                deps.secrets, _body(event), integrations=deps.integrations
+        if method == "POST" and path.endswith("/connectors/quickbooks/start"):
+            if "quickbooks" not in deps.connectors_enabled:
+                return _response(503, {"error": "quickbooks disabled for this deployment"})
+            forbidden = _require_admin(event)
+            if forbidden:
+                return forbidden
+            try:
+                result = connectors_admin.quickbooks_start(
+                    deps.secrets,
+                    _body(event),
+                    redirect_uri=os.environ["APHRODITE_QUICKBOOKS_REDIRECT_URI"],
+                )
+            except connectors_admin.ConnectorValidationError as exc:
+                return _response(400, {"error": str(exc)})
+            _record(
+                deps,
+                event,
+                "connector.connect",
+                "Started a QuickBooks connection",
+                target="quickbooks",
             )
-        except connectors_admin.ConnectorValidationError as exc:
-            return _response(400, {"error": str(exc)})
-        _record(deps, event, "connector.connect", "Connected Estateably", target="estateably")
-        return _response(200, result)
+            return _response(200, result)
 
-    if method == "POST" and path.endswith("/connectors/graph"):
-        if "graph" not in deps.connectors_enabled:
-            return _response(503, {"error": "graph disabled for this deployment"})
-        forbidden = _require_admin(event)
-        if forbidden:
-            return forbidden
-        try:
-            result = connectors_admin.connect_graph(
-                deps.secrets, _body(event), integrations=deps.integrations
-            )
-        except connectors_admin.ConnectorValidationError as exc:
-            return _response(400, {"error": str(exc)})
-        _record(deps, event, "connector.connect", "Connected Microsoft Graph", target="graph")
-        return _response(200, result)
-
-    if method == "POST" and path.endswith("/connectors/clio/authorize-url"):
-        if "clio" not in deps.connectors_enabled:
-            return _response(503, {"error": "clio disabled for this deployment"})
-        forbidden = _require_admin(event)
-        if forbidden:
-            return forbidden
-        try:
-            result = connectors_admin.clio_authorize_url(_body(event))
-        except connectors_admin.ConnectorValidationError as exc:
-            return _response(400, {"error": str(exc)})
-        return _response(200, result)
-
-    if method == "POST" and path.endswith("/connectors/clio/exchange"):
-        if "clio" not in deps.connectors_enabled:
-            return _response(503, {"error": "clio disabled for this deployment"})
-        forbidden = _require_admin(event)
-        if forbidden:
-            return forbidden
-        try:
-            result = connectors_admin.clio_exchange(
-                deps.secrets, _body(event), integrations=deps.integrations
-            )
-        except connectors_admin.ConnectorValidationError as exc:
-            return _response(400, {"error": str(exc)})
-        _record(deps, event, "connector.connect", "Connected Clio", target="clio")
-        return _response(200, result)
-
-    if method == "POST" and path.endswith("/connectors/quickbooks/start"):
-        if "quickbooks" not in deps.connectors_enabled:
-            return _response(503, {"error": "quickbooks disabled for this deployment"})
-        forbidden = _require_admin(event)
-        if forbidden:
-            return forbidden
-        try:
-            result = connectors_admin.quickbooks_start(
+        # Hit directly by Intuit's browser redirect — no Authorization header,
+        # so this route is intentionally not admin-gated (the `state` minted by
+        # /connectors/quickbooks/start is what protects it; see connectors_admin).
+        if method == "GET" and path.endswith("/connectors/quickbooks/callback"):
+            if "quickbooks" not in deps.connectors_enabled:
+                return _response(503, {"error": "quickbooks disabled for this deployment"})
+            query = event.get("queryStringParameters") or {}
+            url = connectors_admin.quickbooks_callback(
                 deps.secrets,
-                _body(event),
+                query,
                 redirect_uri=os.environ["APHRODITE_QUICKBOOKS_REDIRECT_URI"],
+                app_base_url=os.environ["APHRODITE_APP_BASE_URL"],
+                integrations=deps.integrations,
             )
-        except connectors_admin.ConnectorValidationError as exc:
-            return _response(400, {"error": str(exc)})
-        _record(
-            deps, event, "connector.connect", "Started a QuickBooks connection", target="quickbooks"
-        )
-        return _response(200, result)
+            return {"statusCode": 302, "headers": {"Location": url}}
 
-    # Hit directly by Intuit's browser redirect — no Authorization header,
-    # so this route is intentionally not admin-gated (the `state` minted by
-    # /connectors/quickbooks/start is what protects it; see connectors_admin).
-    if method == "GET" and path.endswith("/connectors/quickbooks/callback"):
-        if "quickbooks" not in deps.connectors_enabled:
-            return _response(503, {"error": "quickbooks disabled for this deployment"})
-        query = event.get("queryStringParameters") or {}
-        url = connectors_admin.quickbooks_callback(
-            deps.secrets,
-            query,
-            redirect_uri=os.environ["APHRODITE_QUICKBOOKS_REDIRECT_URI"],
-            app_base_url=os.environ["APHRODITE_APP_BASE_URL"],
-            integrations=deps.integrations,
-        )
-        return {"statusCode": 302, "headers": {"Location": url}}
-
-    return _response(404, {"error": "not found"})
+        return _response(404, {"error": "not found"})
+    except Exception:  # noqa: BLE001 - route dispatch must never crash the Lambda raw
+        logger.exception("unhandled exception in route dispatch")
+        return _response(500, {"error": "internal error"})
 
 
 def _run_health_probe(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
@@ -830,20 +843,24 @@ def _run_health_probe(event: dict[str, Any], context: Any = None) -> dict[str, A
         logger.warning("health probe skipped: integration health table not configured")
         return {"ok": False, "reason": "not configured"}
 
-    import boto3
+    try:
+        import boto3
 
-    from backend.harness import run_checks
-    from services.secrets import SecretsClient
+        from backend.harness import run_checks
+        from services.secrets import SecretsClient
 
-    secrets = SecretsClient(boto3.client("secretsmanager", region_name=REGION))
-    report = run_checks(secrets=secrets, enabled=deps.connectors_enabled)
-    for name, result in report.get("sources", {}).items():
-        ok = bool(result.get("ok"))
-        detail = str(result.get("detail", ""))
-        fix = "" if ok else suggest_fix(name, detail)
-        deps.integrations.record_result(name, ok=ok, detail=detail, suggested_fix=fix)
-    logger.info("health probe complete", extra={"extra_fields": {"ok": report.get("ok")}})
-    return {"ok": report.get("ok"), "checked": sorted(report.get("sources", {}).keys())}
+        secrets = SecretsClient(boto3.client("secretsmanager", region_name=REGION))
+        report = run_checks(secrets=secrets, enabled=deps.connectors_enabled)
+        for name, result in report.get("sources", {}).items():
+            ok = bool(result.get("ok"))
+            detail = str(result.get("detail", ""))
+            fix = "" if ok else suggest_fix(name, detail)
+            deps.integrations.record_result(name, ok=ok, detail=detail, suggested_fix=fix)
+        logger.info("health probe complete", extra={"extra_fields": {"ok": report.get("ok")}})
+        return {"ok": report.get("ok"), "checked": sorted(report.get("sources", {}).keys())}
+    except Exception:  # noqa: BLE001 - health probe must never crash the scheduled invocation
+        logger.exception("health probe crashed")
+        return {"ok": False, "reason": "health probe crashed"}
 
 
 def _run_worker(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
@@ -885,5 +902,6 @@ def _run_worker(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
         return {"ok": True, "job_id": job_id}
     except Exception as exc:  # noqa: BLE001 - record failure on the job, don't crash the worker
         logger.exception("search worker failed", extra={"extra_fields": {"job_id": job_id}})
-        deps.store.fail(job_id, str(exc))
+        classified = classify(f"{type(exc).__name__}: {exc}")
+        deps.store.fail(job_id, classified.message, error_is_friendly=True)
         return {"ok": False, "job_id": job_id}

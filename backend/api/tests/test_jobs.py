@@ -58,6 +58,20 @@ def test_inmemory_fail() -> None:
     assert store.get("j2")["error"] == "boom"
 
 
+def test_inmemory_fail_records_error_is_friendly_flag() -> None:
+    store = InMemoryJobStore(clock=_clock)
+    store.create("j1", "q", None)
+    store.fail("j1", "A classified message", error_is_friendly=True)
+    assert store.get("j1")["error_is_friendly"] is True
+
+
+def test_inmemory_fail_defaults_error_is_friendly_to_false() -> None:
+    store = InMemoryJobStore(clock=_clock)
+    store.create("j1", "q", None)
+    store.fail("j1", "raw text")
+    assert store.get("j1").get("error_is_friendly") is not True
+
+
 def test_inmemory_missing_job_is_none() -> None:
     assert InMemoryJobStore().get("nope") is None
 
@@ -160,6 +174,14 @@ def test_dynamo_fail_records_error() -> None:
     store.fail("j1", "kaboom")
     assert store.get("j1")["status"] == STATUS_ERROR
     assert store.get("j1")["error"] == "kaboom"
+
+
+def test_dynamo_fail_records_error_is_friendly_flag() -> None:
+    fake = FakeDynamo()
+    store = DynamoDbJobStore("jobs", client=fake, clock=_clock)
+    store.create("j1", "q", None)
+    store.fail("j1", "A classified message", error_is_friendly=True)
+    assert store.get("j1")["error_is_friendly"] is True
 
 
 def test_dynamo_missing_is_none() -> None:
