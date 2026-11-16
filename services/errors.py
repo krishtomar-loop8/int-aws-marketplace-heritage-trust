@@ -10,6 +10,7 @@ re-authorize special case). When it is ``None``, messages are connector-agnostic
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -30,10 +31,10 @@ class ClassifiedError:
 def classify(detail: str, *, integration: str | None = None) -> ClassifiedError:
     d = (detail or "").lower()
     named = integration is not None
-    provider = "the provider" if named else "the source system"
+    provider = "the provider" if named else "the service"
 
-    auth_markers = ("token refresh failed", "invalid_grant", "unauthorized", " 401", ":401")
-    if any(k in d for k in auth_markers):
+    auth_markers = ("token refresh failed", "invalid_grant", "unauthorized")
+    if any(k in d for k in auth_markers) or re.search(r"\b401\b", d):
         if integration == "quickbooks":
             message = (
                 "The QuickBooks OAuth token has expired or been revoked. Re-authorize the "
@@ -51,25 +52,25 @@ def classify(detail: str, *, integration: str | None = None) -> ClassifiedError:
                 "Re-authorize the account or rotate its secret in Secrets Manager."
             )
         return ClassifiedError(ErrorClass.NEEDS_REAUTH, message)
-    if "402" in d:
+    if re.search(r"\b402\b", d):
         return ClassifiedError(
             ErrorClass.PERMANENT,
             f"{provider.capitalize()} reported a billing/payment hold on the account "
             "(HTTP 402). Check the provider's subscription/billing status."
             if named
-            else "The source system reported a billing/payment hold on the account "
-            "(HTTP 402). Check the source system's subscription/billing status.",
+            else "A billing/payment hold was reported (HTTP 402). Check the account's "
+            "subscription/billing status.",
         )
-    if "403" in d or "forbidden" in d:
+    if re.search(r"\b403\b", d) or "forbidden" in d:
         return ClassifiedError(
             ErrorClass.PERMANENT,
             "Access was denied (HTTP 403). Check the connector's API scopes/permissions "
             "and that the app is still authorized on the provider side."
             if named
             else "Access was denied (HTTP 403). Check the API scopes/permissions "
-            "and that the app is still authorized on the source system side.",
+            "and that the app is still authorized on the service side.",
         )
-    if any(k in d for k in ("429", "throttl", "rate limit", "too many requests")):
+    if re.search(r"\b429\b", d) or any(k in d for k in ("throttl", "rate limit", "too many requests")):
         return ClassifiedError(
             ErrorClass.TRANSIENT,
             f"{provider.capitalize()} is rate-limiting requests (HTTP 429). This is usually "
@@ -80,22 +81,25 @@ def classify(detail: str, *, integration: str | None = None) -> ClassifiedError:
             ErrorClass.TRANSIENT,
             f"{provider.capitalize()} was slow or unreachable. This is usually transient — it "
             "should clear on the next check; if it persists, check the "
-            f"{'provider' if named else 'source system'}'s status page.",
+            f"{'provider' if named else 'service'}'s status page.",
         )
-    if any(k in d for k in ("500", "502", "503", "504", "serviceunavailable", "server error")):
+    if (
+        re.search(r"\b(?:500|502|503|504)\b", d)
+        or any(k in d for k in ("serviceunavailable", "server error"))
+    ):
         return ClassifiedError(
             ErrorClass.TRANSIENT,
             f"{provider.capitalize()} returned a server error (5xx) — likely a provider-side "
             "outage. It should recover on its own; retry shortly."
             if named
-            else "The source system returned a server error (5xx) — likely a source-side "
-            "outage. It should recover on its own; retry shortly.",
+            else "The service returned a server error (5xx) — likely an outage. "
+            "It should recover on its own; retry shortly.",
         )
     return ClassifiedError(
         ErrorClass.UNKNOWN,
         "The connector returned an error (see the detail). If it persists, check the "
         "credentials in Secrets Manager and the provider's status page."
         if named
-        else "An error was returned (see the detail). If it persists, check the "
-        "credentials in Secrets Manager and the source system's status page.",
+        else "An unexpected error occurred. If it persists, check the service's "
+        "status and the request's configuration.",
     )
