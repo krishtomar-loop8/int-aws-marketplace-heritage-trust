@@ -41,6 +41,7 @@ from backend.search.quick_answers import QuickAnswerService
 from backend.search.resolve import MatterResolver
 from backend.search.synthesize import MatterSynthesizer
 from services.config import ConfigClient
+from services.errors import classify
 from services.logging import get_logger
 from services.secrets import SecretsClient
 
@@ -901,5 +902,6 @@ def _run_worker(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
         return {"ok": True, "job_id": job_id}
     except Exception as exc:  # noqa: BLE001 - record failure on the job, don't crash the worker
         logger.exception("search worker failed", extra={"extra_fields": {"job_id": job_id}})
-        deps.store.fail(job_id, str(exc))
+        classified = classify(f"{type(exc).__name__}: {exc}")
+        deps.store.fail(job_id, classified.message, error_is_friendly=True)
         return {"ok": False, "job_id": job_id}

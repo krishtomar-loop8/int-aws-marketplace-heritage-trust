@@ -59,7 +59,7 @@ class JobStore(Protocol):
     def create(self, job_id: str, query: str, actor: dict[str, Any] | None) -> dict[str, Any]: ...
     def get(self, job_id: str) -> dict[str, Any] | None: ...
     def complete(self, job_id: str, result: dict[str, Any]) -> None: ...
-    def fail(self, job_id: str, error: str) -> None: ...
+    def fail(self, job_id: str, error: str, *, error_is_friendly: bool = False) -> None: ...
     def progress(self, job_id: str, phase: str) -> None: ...
     def delete(self, job_id: str) -> None: ...
     def list_for_actor(self, actor_sub: str, *, limit: int = 50) -> list[dict[str, Any]]: ...
@@ -97,10 +97,15 @@ class InMemoryJobStore:
                 updated_at=self._clock(),
             )
 
-    def fail(self, job_id: str, error: str) -> None:
+    def fail(self, job_id: str, error: str, *, error_is_friendly: bool = False) -> None:
         item = self._items.get(job_id)
         if item is not None:
-            item.update(status=STATUS_ERROR, error=error, updated_at=self._clock())
+            item.update(
+                status=STATUS_ERROR,
+                error=error,
+                error_is_friendly=error_is_friendly,
+                updated_at=self._clock(),
+            )
 
     def progress(self, job_id: str, phase: str) -> None:
         item = self._items.get(job_id)
@@ -196,6 +201,8 @@ class DynamoDbJobStore:
             out["result"] = json.loads(item["result"]["S"])
         if "error" in item:
             out["error"] = item["error"]["S"]
+        if "error_is_friendly" in item:
+            out["error_is_friendly"] = item["error_is_friendly"]["BOOL"]
         if "phase" in item:
             out["phase"] = item["phase"]["S"]
         return out
@@ -222,8 +229,12 @@ class DynamoDbJobStore:
             ExpressionAttributeValues=values,
         )
 
-    def fail(self, job_id: str, error: str) -> None:
-        self._update(job_id, STATUS_ERROR, "error", {"S": error[:1024]})
+    def fail(self, job_id: str, error: str, *, error_is_friendly: bool = False) -> None:
+        self._update(
+            job_id,
+            STATUS_ERROR,
+            {"error": {"S": error[:1024]}, "error_is_friendly": {"BOOL": error_is_friendly}},
+        )
 
     def delete(self, job_id: str) -> None:
         self.client.delete_item(TableName=self._table_name, Key={"job_id": {"S": job_id}})
@@ -284,15 +295,19 @@ class DynamoDbJobStore:
         ]
         return _source_errors_of_latest((self.get(jid) or {}).get("result") for jid in done_ids)
 
-    def _update(self, job_id: str, status: str, field: str, value: dict[str, Any]) -> None:
+    def _update(self, job_id: str, status: str, fields: dict[str, dict[str, Any]]) -> None:
+        names = {"#s": "status"}
+        values: dict[str, Any] = {":s": {"S": status}, ":u": {"N": str(int(self._clock()))}}
+        assignments = ["#s = :s"]
+        for i, (field, value) in enumerate(fields.items()):
+            name_key, value_key = f"#f{i}", f":v{i}"
+            names[name_key] = field
+            values[value_key] = value
+            assignments.append(f"{name_key} = {value_key}")
         self.client.update_item(
             TableName=self._table_name,
             Key={"job_id": {"S": job_id}},
-            UpdateExpression="SET #s = :s, #f = :v, updated_at = :u",
-            ExpressionAttributeNames={"#s": "status", "#f": field},
-            ExpressionAttributeValues={
-                ":s": {"S": status},
-                ":v": value,
-                ":u": {"N": str(int(self._clock()))},
-            },
+            UpdateExpression=f"SET {', '.join(assignments)}, updated_at = :u",
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=values,
         )

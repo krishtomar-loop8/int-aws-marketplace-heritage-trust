@@ -313,8 +313,10 @@ def test_worker_records_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     deps.store.create("j1", "q", {"sub": "u"})
     out = handlers.handler({"worker": True, "job_id": "j1", "query": "q", "actor": None})
     assert out["ok"] is False
-    assert deps.store.get("j1")["status"] == "error"
-    assert "exploded" in deps.store.get("j1")["error"]
+    job = deps.store.get("j1")
+    assert job["status"] == "error"
+    assert job["error_is_friendly"] is True
+    assert "exploded" not in job["error"]  # raw exception text no longer shown
 
 
 def test_unhandled_route_exception_returns_500_not_a_crash(monkeypatch: pytest.MonkeyPatch) -> None:
