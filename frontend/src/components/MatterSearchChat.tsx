@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { friendlyError, getConnectorHealth, getSearch, search } from "../api";
+import { friendlyError, getConnectorHealth, getSearch, search, SearchJobError } from "../api";
 import { useSearchJobs } from "../lib/searchJobs";
 import { clearThread, loadThread, saveThread } from "../lib/threadStore";
 import { MOCK_ANSWER, MOCK_DISAMBIGUATION, MOCK_RESULT } from "../mock";
@@ -150,7 +150,8 @@ export function MatterSearchChat({
       }
       setMessages((m) => replaceLast(m, { role: "assistant", kind: "result", result, query: text }));
     } catch (e) {
-      const msg = friendlyError(e instanceof Error ? e.message : "");
+      const isFriendly = e instanceof SearchJobError && e.isFriendly;
+      const msg = friendlyError(e instanceof Error ? e.message : "", isFriendly);
       setMessages((m) =>
         replaceLast(m, {
           role: "assistant",

@@ -22,10 +22,24 @@ const POLL_INTERVAL_MS = 2000;
 // several minutes (accuracy-first), matching the search worker's Lambda timeout.
 const POLL_TIMEOUT_MS = 900_000;
 
+// A search-job failure whose message was already produced by the backend's
+// classification catalog (Task 4) — carries isFriendly so the caller can show
+// it verbatim instead of re-judging it by keyword.
+export class SearchJobError extends Error {
+  isFriendly: boolean;
+  constructor(message: string, isFriendly: boolean) {
+    super(message);
+    this.isFriendly = isFriendly;
+  }
+}
+
 // Translate a raw backend/job error into calm, non-technical copy for the chat —
 // staff should never see a botocore/stack string. Unknown errors get a generic
 // line rather than the raw text (the original is still in the job record + logs).
-export function friendlyError(raw?: string): string {
+// When isFriendly is set, raw is already a classified, staff-safe message — trust
+// it verbatim instead of re-judging it by keyword.
+export function friendlyError(raw?: string, isFriendly?: boolean): string {
+  if (isFriendly && raw) return raw;
   const s = (raw || "").toLowerCase();
   if (s.includes("timed out") || s.includes("timeout"))
     return "The search took too long to finish — this can happen on very large matters. Please try again.";
@@ -78,7 +92,8 @@ export async function search(
     if (!poll.ok) throw new Error(`Status check failed (${poll.status})`);
     const job = await poll.json();
     if (job.status === "done") return job.result as SearchResult;
-    if (job.status === "error") throw new Error(job.error || "Search job failed");
+    if (job.status === "error")
+      throw new SearchJobError(job.error || "Search job failed", Boolean(job.error_is_friendly));
     if (job.phase && onProgress) onProgress(job.phase as string);
   }
   throw new Error("Timed out waiting for the search to finish");
@@ -98,7 +113,8 @@ export async function getSearch(base: string, jobId: string, token?: string): Pr
   const res = await fetch(`${base}/search/${jobId}`, { headers: authHeaders(token) });
   if (!res.ok) throw new Error(`Failed to load search (${res.status})`);
   const job = await res.json();
-  if (job.status === "error") throw new Error(job.error || "Search failed");
+  if (job.status === "error")
+    throw new SearchJobError(job.error || "Search failed", Boolean(job.error_is_friendly));
   if (job.status !== "done") throw new Error("That search is still running.");
   return job.result as SearchResult;
 }
