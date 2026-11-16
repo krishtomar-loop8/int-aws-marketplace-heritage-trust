@@ -84,6 +84,12 @@ def test_word_boundary_still_matches_a_real_401_auth_marker() -> None:
     result = classify("HttpError: 401 Unauthorized")
     assert result.error_class == ErrorClass.NEEDS_REAUTH
 
+def test_url_embedded_digits_do_not_preempt_the_real_status_code() -> None:
+    result = classify(
+        "HttpError: GET https://app.clio.com/api/v4/matters/401.json failed: 503"
+    )
+    assert result.error_class == ErrorClass.TRANSIENT  # the real status, 503, wins
+
 def test_generic_message_never_assumes_a_source_system_or_secrets_manager() -> None:
     for detail in (
         "HttpError: 402 Payment Required",
@@ -96,3 +102,4 @@ def test_generic_message_never_assumes_a_source_system_or_secrets_manager() -> N
         msg = classify(detail).message.lower()
         assert "source system" not in msg
         assert "secrets manager" not in msg
+        assert "next check" not in msg
