@@ -103,3 +103,47 @@ def test_generic_message_never_assumes_a_source_system_or_secrets_manager() -> N
         assert "source system" not in msg
         assert "secrets manager" not in msg
         assert "next check" not in msg
+
+
+def test_bedrock_access_denied_names_the_bedrock_console() -> None:
+    result = classify("LLMError: Bedrock Converse failed (AccessDeniedException)")
+    assert result.error_class == ErrorClass.PERMANENT
+    assert "bedrock console" in result.message.lower()
+    assert "model access" in result.message.lower()
+
+def test_bedrock_throttling_is_transient_and_never_cites_http_429() -> None:
+    result = classify("LLMError: Bedrock Converse failed (ThrottlingException)")
+    assert result.error_class == ErrorClass.TRANSIENT
+    assert "429" not in result.message
+    assert "ai" in result.message.lower() or "model" in result.message.lower()
+
+def test_bedrock_service_unavailable_is_transient() -> None:
+    result = classify("LLMError: Bedrock Converse failed (ServiceUnavailableException)")
+    assert result.error_class == ErrorClass.TRANSIENT
+
+def test_bedrock_timeout_is_transient() -> None:
+    result = classify("LLMError: Bedrock Converse timed out waiting for the response")
+    assert result.error_class == ErrorClass.TRANSIENT
+
+def test_bedrock_connection_failure_is_transient() -> None:
+    result = classify("LLMError: Bedrock connection failed (ReadTimeoutError)")
+    assert result.error_class == ErrorClass.TRANSIENT
+
+def test_bedrock_unrecognized_code_is_bedrock_flavored_unknown() -> None:
+    result = classify("LLMError: Bedrock Converse failed (ValidationException)")
+    assert result.error_class == ErrorClass.UNKNOWN
+    assert "connector" not in result.message.lower()  # not the connector-flavored default
+    assert "ai" in result.message.lower() or "model" in result.message.lower()
+
+def test_bedrock_response_shape_error_is_bedrock_flavored_unknown() -> None:
+    result = classify("LLMError: Unexpected Bedrock Converse response shape: KeyError('output')")
+    assert result.error_class == ErrorClass.UNKNOWN
+
+def test_bedrock_branch_never_fires_for_a_named_connector_caller() -> None:
+    # Sanity: a Bedrock marker in a connector-named call should not exist in
+    # practice, but confirm the branch is keyed off the detail text, not the
+    # integration argument, and doesn't accidentally change named output when
+    # no Bedrock marker is present.
+    result = classify("HttpError: 403 Forbidden", integration="clio")
+    assert result.error_class == ErrorClass.PERMANENT
+    assert "bedrock" not in result.message.lower()

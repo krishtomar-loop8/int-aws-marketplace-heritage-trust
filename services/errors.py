@@ -47,6 +47,34 @@ def classify(detail: str, *, integration: str | None = None) -> ClassifiedError:
     named = integration is not None
     provider = "the provider" if named else "the service"
 
+    if "bedrock" in d:
+        if "accessdeniedexception" in d:
+            return ClassifiedError(
+                ErrorClass.PERMANENT,
+                "This deployment's Bedrock model isn't enabled in this region. Enable it in the "
+                "Bedrock console → Model access, then try the search again.",
+            )
+        retryable_exhausted = (
+            "throttlingexception",
+            "serviceunavailableexception",
+            "modeltimeoutexception",
+            "internalserverexception",
+            "modelnotreadyexception",
+            "timed out",
+            "connection failed",
+        )
+        if any(k in d for k in retryable_exhausted):
+            return ClassifiedError(
+                ErrorClass.TRANSIENT,
+                "The AI service is busy or temporarily unreachable. This is usually transient — "
+                "please try again shortly.",
+            )
+        return ClassifiedError(
+            ErrorClass.UNKNOWN,
+            "The AI service had a problem generating this summary. If it persists, check the "
+            "Bedrock model's status and this deployment's configuration.",
+        )
+
     auth_markers = ("token refresh failed", "invalid_grant", "unauthorized")
     if any(k in d for k in auth_markers) or _has_status_code(d, "401"):
         if integration == "quickbooks":
