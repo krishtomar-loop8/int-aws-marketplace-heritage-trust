@@ -45,13 +45,25 @@ export function StatusReport({
           finished. Please run the search again.
         </p>
       ) : (
-        answer.insufficient_info && (
-          <p className="banner banner-warn">
-            Some sources were unavailable for this search, so parts of the picture may be missing
-            — treat unconfirmed items as outstanding.
-            {answer.insufficient_reasons?.[0] ? ` (${answer.insufficient_reasons[0]})` : ""}
-          </p>
-        )
+        <>
+          {answer.insufficient_info && (
+            <p className="banner banner-warn">
+              Some sources were unavailable for this search, so parts of the picture may be missing
+              — treat unconfirmed items as outstanding.
+              {answer.insufficient_reasons?.[0] ? ` (${answer.insufficient_reasons[0]})` : ""}
+            </p>
+          )}
+          {answer.missing_sections.length > 0 && (
+            <p className="banner banner-warn">
+              This summary is missing:{" "}
+              {answer.missing_sections
+                .map((key) => SECTION_ORDER.find((s) => s.key === key)?.title ?? key)
+                .join(", ")}
+              . The model's reply may have been incomplete — run the search again if you need the
+              full picture.
+            </p>
+          )}
+        </>
       )}
 
       <dl className="sections">
