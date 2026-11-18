@@ -65,7 +65,7 @@ This is Loop8-owned product code. Do not add Claude attributions or "Co-Authored
 ### Coordinates
 
 - **GitHub:** `github.com/krishtomar-loop8/int-aws-marketplace-heritage-trust`
-- Use **GitHub Issues + Milestones** to track work. Keep a **gitignored local scratch file** for progress notes.
+- Use **GitHub Issues + Milestones** to track work. Keep a **gitignored local scratch file** at `.scratch/SESSION-HANDOFF.md` for progress notes — **update it the moment each task/phase completes** (status, what shipped, what's next), not only as an end-of-session summary, so any session can pick up mid-stream from this file alone.
 
 ## Critical Constraints
 
