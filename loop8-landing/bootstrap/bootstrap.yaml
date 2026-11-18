@@ -136,6 +136,7 @@ Resources:
                   - s3:DeleteBucketPolicy
                   - s3:GetBucketPublicAccessBlock
                   - s3:PutBucketPublicAccessBlock
+                  - s3:GetBucketObjectLockConfiguration
                   - s3:GetEncryptionConfiguration
                   - s3:PutEncryptionConfiguration
                   - s3:GetBucketOwnershipControls
@@ -148,6 +149,10 @@ Resources:
                   - s3:PutBucketTagging
                   - s3:GetBucketLogging
                   - s3:GetBucketWebsite
+                  - s3:GetBucketAcl
+                  - s3:GetAccelerateConfiguration
+                  - s3:GetBucketRequestPayment
+                  - s3:GetReplicationConfiguration
                   - s3:GetObject
                   - s3:PutObject
                   - s3:DeleteObject
@@ -196,6 +201,7 @@ Resources:
                   - lambda:DeleteFunction
                   - lambda:GetFunction
                   - lambda:GetFunctionConfiguration
+                  - lambda:GetFunctionCodeSigningConfig
                   - lambda:UpdateFunctionCode
                   - lambda:UpdateFunctionConfiguration
                   - lambda:AddPermission
@@ -231,6 +237,7 @@ Resources:
                   - route53:ListResourceRecordSets
                   - route53:ChangeResourceRecordSets
                   - route53:GetChange
+                  - route53:ListTagsForResource
                 Resource: "*"
               - Sid: AcmCertificates
                 Effect: Allow

@@ -3,8 +3,10 @@
 # placeholder package lets `terraform apply` create the function before that
 # code exists — the same "infra declared ahead of the code that fills it"
 # split terraform/modules/search_api/main.tf uses for its own Lambda zip.
-# Once Task 3 lands, point `source_dir` below at the real backend directory
-# (or have Task 5's CI build/upload the real package over this one).
+# Task 3 has since landed: loop8-landing-deploy.yml's "Build Lambda package"
+# step now copies the real handler.py over this stub in place (CI-side) ahead
+# of `terraform apply`, rather than this data block's `source_dir` pointing
+# at the real backend directory directly.
 data "archive_file" "lambda_placeholder" {
   type        = "zip"
   source_dir  = "${path.module}/lambda_placeholder"
@@ -79,6 +81,7 @@ resource "aws_lambda_function" "api" {
       LAUNCH_REGION          = var.launch_region
       LAUNCH_STACK_NAME      = var.launch_stack_name
       INSTALLER_TEMPLATE_URL = "https://${aws_s3_bucket.installer_mirror.bucket_regional_domain_name}/installer/latest/installer.yaml"
+      EXPECTED_PRODUCT_CODE  = var.expected_product_code
     }
   }
 
@@ -257,4 +260,9 @@ data "aws_iam_policy_document" "installer_mirror" {
 resource "aws_s3_bucket_policy" "installer_mirror" {
   bucket = aws_s3_bucket.installer_mirror.id
   policy = data.aws_iam_policy_document.installer_mirror.json
+
+  # A new bucket blocks public policies by default; without this, a first
+  # apply can try to PutBucketPolicy before the access-block setting below
+  # has taken effect, which AWS rejects.
+  depends_on = [aws_s3_bucket_public_access_block.installer_mirror]
 }

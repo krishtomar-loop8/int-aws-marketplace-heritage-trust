@@ -23,13 +23,28 @@ issuer URL), remove the `GitHubOIDCProvider` resource from the template and
 point `TerraformDeployRole`'s trust policy `Federated` principal at that
 existing provider's ARN instead, before deploying.
 
+**Deploy this stack in `us-east-1`.** `TerraformDeployRole`'s `ApiGatewayHttpApi`
+statement (bootstrap.yaml) scopes its resource ARNs with `${AWS::Region}` —
+CloudFormation's own pseudo parameter for the region *this bootstrap stack*
+is deployed in. That region must therefore exactly match the region the
+`loop8-landing/terraform` stack actually runs in (`vars.AWS_REGION` /
+`TF_VAR_aws_region` in `loop8-landing-deploy.yml`), or every API Gateway call
+in that Terraform apply gets `AccessDenied`. `us-east-1` is the recommended
+fixed choice — it's already the `aws_region` variable's default
+(`loop8-landing/terraform/variables.tf`), so no override is needed on either
+side as long as both stay in sync. (This is a same-region consistency
+requirement, not an `aws-marketplace:ResolveCustomer` region restriction —
+`ResolveCustomer` itself is supported in most commercial AWS regions,
+`us-east-1` and `ca-central-1` included; see AWS's own
+[Metering API region support](https://docs.aws.amazon.com/marketplace/latest/APIReference/metering-regions.html).)
+
 ## Apply (assisted CLI, one time)
 
 Requires admin credentials in Loop8's AWS account:
 
 ```bash
 aws cloudformation deploy \
-  --region <loop8-account-region> \
+  --region us-east-1 \
   --stack-name aphrodite-landing-bootstrap \
   --template-file loop8-landing/bootstrap/bootstrap.yaml \
   --capabilities CAPABILITY_NAMED_IAM \
@@ -38,10 +53,12 @@ aws cloudformation deploy \
 # Read the outputs (feed these into Task 2's Terraform backend config and
 # Task 5's GitHub Actions workflow/repo variables):
 aws cloudformation describe-stacks \
-  --region <loop8-account-region> \
+  --region us-east-1 \
   --stack-name aphrodite-landing-bootstrap \
   --query 'Stacks[0].Outputs' --output table
 ```
+
+Set the GitHub Environment's `AWS_REGION` variable to `us-east-1` to match.
 
 ## Outputs and where they're used next
 

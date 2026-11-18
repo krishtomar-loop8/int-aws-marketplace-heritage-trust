@@ -42,3 +42,9 @@ variable "launch_stack_name" {
   default     = "Aphrodite"
   description = "Default CloudFormation stack name pre-filled in the buyer's launch link."
 }
+
+variable "expected_product_code" {
+  type        = string
+  default     = ""
+  description = "ResolveCustomer's ProductCode must match this value, if set (handler.py's pinning check). Left empty (the default) disables the check - set it once Loop8's AWS Marketplace listing's product code is known."
+}

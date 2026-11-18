@@ -1,10 +1,11 @@
 """Placeholder Lambda handler.
 
 Lets `terraform apply` create the loop8-landing-api function (api.tf) before
-Task 3 (loop8-landing/backend/handler.py) exists. Once Task 3 lands, swap
-api.tf's `data "archive_file" "lambda_placeholder"` `source_dir` to point at
-the real backend directory (or have CI build/upload the real package) -
-don't leave the stack pointed at this stub.
+Task 3 (loop8-landing/backend/handler.py) existed. Task 3 has since landed;
+this stub is now overwritten in place by loop8-landing-deploy.yml's "Build
+Lambda package" CI step (`cp ../backend/handler.py lambda_placeholder/handler.py`)
+before every `terraform apply`, so the deployed function always runs the real
+handler, not this file.
 """
 
 

@@ -92,12 +92,10 @@ resource "aws_cloudfront_distribution" "site" {
 
   # Same multi-page-static-site fallback as the product's own SPA (403/404 ->
   # index.html at 200) so a direct, unknown-path hit doesn't surface a raw S3
-  # 403. NOTE for whoever builds Task 4 (frontend): confirm this is still the
-  # right fallback once setup.html's actual request path is nailed down (the
-  # design doc's redirect target is `/setup?session=...` with no `.html`
-  # extension — that needs either a matching object key, a CloudFront
-  # Function rewrite, or index.html itself handling both cases via
-  # `location.search`, per the design doc's own suggestion).
+  # 403. Resolved: the redirect target is `/setup.html?session=...` (handler.py's
+  # SETUP_URL), a real object key the frontend builds (Task 2's review ruling,
+  # to avoid needing a CloudFront Function rewrite) - not the design doc's
+  # original extensionless "/setup" suggestion.
   custom_error_response {
     error_code            = 403
     response_code         = 200

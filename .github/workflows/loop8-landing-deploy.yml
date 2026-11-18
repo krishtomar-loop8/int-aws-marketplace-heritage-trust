@@ -9,7 +9,14 @@ name: loop8-landing-deploy
 #
 # Requires GitHub Environment `loop8-landing` with vars:
 #   AWS_DEPLOY_ROLE_ARN - Task 1 bootstrap's DeployRoleArn output
-#   AWS_REGION          - region for loop8-landing/terraform's var.aws_region
+#   AWS_REGION          - region for loop8-landing/terraform's var.aws_region.
+#                         Must be us-east-1, matching the region the bootstrap
+#                         stack itself was deployed in (see
+#                         loop8-landing/bootstrap/README.md) - the deploy
+#                         role's IAM grants are scoped to that region.
+#                         Passed through explicitly as TF_VAR_aws_region below
+#                         rather than relying on the Terraform variable's
+#                         default.
 #   TF_STATE_BUCKET     - Task 1 bootstrap's StateBucketName output
 # (same GitHub variable names terraform/bootstrap/README.md uses for the
 # product stack's own equivalents - see loop8-landing/bootstrap/README.md.)
@@ -67,6 +74,8 @@ jobs:
         run: cp ../backend/handler.py lambda_placeholder/handler.py
 
       - name: Init
+        env:
+          TF_VAR_aws_region: ${{ vars.AWS_REGION }}
         run: |
           terraform init -input=false \
             -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
@@ -74,6 +83,8 @@ jobs:
             -backend-config="region=${{ vars.AWS_REGION }}"
 
       - name: Apply
+        env:
+          TF_VAR_aws_region: ${{ vars.AWS_REGION }}
         run: terraform apply -input=false -auto-approve
 
       - name: Deploy static site

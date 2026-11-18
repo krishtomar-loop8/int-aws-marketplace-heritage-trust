@@ -66,6 +66,25 @@ class FakeMarketplace:
         return dict(self._response)
 
 
+class FakeMarketplaceThatRejects:
+    """Stub whose ``resolve_customer`` raises, like a real ``meteringmarketplace``
+    client does for an invalid/expired/replayed Marketplace token
+    (``botocore.exceptions.ClientError`` with e.g. ``InvalidTokenException``)."""
+
+    def __init__(self, error_code: str = "InvalidTokenException") -> None:
+        self._error_code = error_code
+        self.calls: list[str] = []
+
+    def resolve_customer(self, *, RegistrationToken: str) -> dict[str, Any]:
+        from botocore.exceptions import ClientError
+
+        self.calls.append(RegistrationToken)
+        raise ClientError(
+            {"Error": {"Code": self._error_code, "Message": "token is invalid"}},
+            "ResolveCustomer",
+        )
+
+
 def http_event(method: str, path: str, *, body: str = "") -> dict[str, Any]:
     return {
         "requestContext": {"http": {"method": method, "path": path}},
@@ -135,6 +154,26 @@ def test_fulfillment_resolves_token_and_redirects_with_opaque_session(monkeypatc
     assert int(item["expires_at"]["N"]) > int(time.time())
     assert item["customer_identifier"]["S"] == "cust-123"
     assert fake_marketplace.calls == ["tok-xyz"]  # ResolveCustomer was actually called (stubbed)
+
+
+def test_fulfillment_redirects_without_session_when_resolve_customer_fails(monkeypatch) -> None:
+    fake_dynamo = FakeDynamo()
+    fake_marketplace = FakeMarketplaceThatRejects()
+    monkeypatch.setenv("SUBSCRIPTIONS_TABLE", "subs")
+    monkeypatch.setattr(handler, "_dynamo", lambda: fake_dynamo)
+    monkeypatch.setattr(handler, "_marketplace_client", lambda: fake_marketplace)
+
+    result = handler.handler(
+        http_event("POST", "/fulfillment", body="x-amzn-marketplace-token=tok-bad"), None
+    )
+
+    # Plain error state (per the design doc), not a crash: a 302 back to
+    # setup.html with no ?session= - the frontend already renders this as
+    # "Missing or invalid session".
+    assert result["statusCode"] == 302
+    assert result["headers"]["Location"] == "https://deploy.loop8.io/setup.html"
+    assert fake_dynamo.items == {}  # no session written for a failed resolution
+    assert fake_marketplace.calls == ["tok-bad"]  # ResolveCustomer was actually attempted
 
 
 def test_fulfillment_rejects_product_code_mismatch_when_pinning_is_configured(monkeypatch) -> None:

@@ -32,6 +32,11 @@ output "installer_mirror_bucket" {
 }
 
 output "lambda_function_name" {
-  description = "Name of the fulfillment/subscribe Lambda function (for CI code deploys)."
+  # Not currently read by any workflow (the Lambda's code is deployed by
+  # `terraform apply` itself, via the archive_file/source_code_hash in
+  # api.tf - not a separate CI code-deploy step). Kept as a cheap,
+  # ready-to-use handle for manual AWS CLI/console lookups and any future
+  # CI step that needs the function name directly.
+  description = "Name of the fulfillment/subscribe Lambda function."
   value       = aws_lambda_function.api.function_name
 }

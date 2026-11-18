@@ -26,11 +26,15 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import time
 import urllib.parse
 import uuid
 from typing import Any
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 # -- small, named constants (not magic strings buried in the function bodies) -
 
@@ -119,12 +123,29 @@ def _handle_fulfillment(event: dict[str, Any]) -> dict[str, Any]:
     if not token:
         return _response(400, {"error": "missing x-amzn-marketplace-token"})
 
-    result = _marketplace_client().resolve_customer(RegistrationToken=token)
+    from botocore.exceptions import ClientError
+
+    try:
+        result = _marketplace_client().resolve_customer(RegistrationToken=token)
+    except ClientError as exc:
+        # An invalid/expired/replayed Marketplace token raises here (e.g.
+        # InvalidTokenException/ExpiredTokenException). Per the design doc,
+        # this must surface as a plain error state, not a crash - redirect to
+        # the same setup page with no ?session=, which the frontend already
+        # renders as a "Missing or invalid session" error.
+        logger.warning(
+            "ResolveCustomer failed: %s: %s",
+            exc.response.get("Error", {}).get("Code", "Unknown"),
+            exc.response.get("Error", {}).get("Message", str(exc)),
+        )
+        return _redirect(SETUP_URL)
 
     product_code = result.get("ProductCode", "")
     expected_product_code = os.environ.get("EXPECTED_PRODUCT_CODE", "").strip()
     if expected_product_code and product_code != expected_product_code:
         return _response(403, {"error": "product code does not match this listing"})
+    if not expected_product_code:
+        logger.info("EXPECTED_PRODUCT_CODE is unset - skipping product-code pinning check")
 
     session_id = str(uuid.uuid4())
     now = int(time.time())
