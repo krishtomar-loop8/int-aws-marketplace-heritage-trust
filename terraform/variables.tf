@@ -154,6 +154,12 @@ variable "org_name" {
   description = "Deployment's organization display name, used in the matter-search system prompt. Does NOT drive the AML own-company exclusion check — see own_company_names."
 }
 
+variable "admin_email" {
+  type        = string
+  default     = ""
+  description = "Deployment's admin contact email, set at first launch from the Marketplace subscribe flow; editable later via the Deployment Config tab."
+}
+
 variable "org_office_address" {
   type        = string
   default     = "545 Clyde Avenue, West Vancouver"
