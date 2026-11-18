@@ -35,4 +35,4 @@ jobs:
           cfn-lint dist/installer.yaml
 
       - name: Installer script (shellcheck)
-        run: shellcheck installer/deploy.sh
+        run: shellcheck -x installer/deploy.sh installer/classify_apply_failure.sh
