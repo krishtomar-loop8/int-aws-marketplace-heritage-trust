@@ -8,32 +8,37 @@
 // docs/superpowers/specs/2026-11-17-marketplace-landing-page-design.md.
 const SUBSCRIBE_URL = "https://api.deploy.loop8.io/subscribe";
 
-function showResult(container, form, html, cssClass) {
+function showResult(container, form, node, cssClass) {
   form.hidden = true;
-  container.innerHTML = html;
+  container.innerHTML = "";
+  container.appendChild(node);
   container.className = "result " + cssClass;
   container.hidden = false;
 }
 
 function renderSuccess(container, form, launchUrl) {
-  showResult(
-    container,
-    form,
-    '<p>You\'re all set. Click below to launch Aphrodite in your own AWS account via CloudFormation.</p>' +
-      '<a class="launch-link" href="' +
-      encodeURI(launchUrl) +
-      '" target="_blank" rel="noopener noreferrer">Launch Aphrodite</a>',
-    "success"
-  );
+  const fragment = document.createDocumentFragment();
+
+  const intro = document.createElement("p");
+  intro.textContent =
+    "You're all set. Click below to launch Aphrodite in your own AWS account via CloudFormation.";
+  fragment.appendChild(intro);
+
+  const link = document.createElement("a");
+  link.className = "launch-link";
+  link.setAttribute("href", launchUrl);
+  link.setAttribute("target", "_blank");
+  link.setAttribute("rel", "noopener noreferrer");
+  link.textContent = "Launch Aphrodite";
+  fragment.appendChild(link);
+
+  showResult(container, form, fragment, "success");
 }
 
 function renderError(container, form, message) {
-  showResult(
-    container,
-    form,
-    "<p>" + message + "</p>",
-    "error"
-  );
+  const paragraph = document.createElement("p");
+  paragraph.textContent = message;
+  showResult(container, form, paragraph, "error");
 }
 
 function initSetupForm() {
@@ -52,6 +57,8 @@ function initSetupForm() {
     );
     return;
   }
+
+  form.hidden = false;
 
   form.addEventListener("submit", function (event) {
     event.preventDefault();
@@ -76,17 +83,17 @@ function initSetupForm() {
           return { ok: response.ok, data: data };
         });
       })
-      .then(function (result) {
-        if (result.ok && result.data && result.data.launch_url) {
-          renderSuccess(document.getElementById("result"), form, result.data.launch_url);
+      .then(function (outcome) {
+        if (outcome.ok && outcome.data && outcome.data.launch_url) {
+          renderSuccess(result, form, outcome.data.launch_url);
         } else {
-          const reason = (result.data && result.data.error) || "Something went wrong. Please try again.";
-          renderError(document.getElementById("result"), form, reason);
+          const reason = (outcome.data && outcome.data.error) || "Something went wrong. Please try again.";
+          renderError(result, form, reason);
         }
       })
       .catch(function () {
         renderError(
-          document.getElementById("result"),
+          result,
           form,
           "Could not reach the server. Please check your connection and try again."
         );
