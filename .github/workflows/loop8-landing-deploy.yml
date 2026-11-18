@@ -1,0 +1,76 @@
+name: loop8-landing-deploy
+
+# Deploys Loop8's own Marketplace landing-page stack (loop8-landing/terraform)
+# into Loop8's own AWS account - a separate trust boundary from both the
+# customer-deployed product's terraform/ stack (terraform.yml) and the
+# sandbox account installer-e2e.yml exercises. Vars are scoped to their own
+# GitHub Environment (loop8-landing) the same way installer-e2e.yml scopes a
+# different AWS account's vars via `environment: sandbox`.
+#
+# Requires GitHub Environment `loop8-landing` with vars:
+#   AWS_DEPLOY_ROLE_ARN - Task 1 bootstrap's DeployRoleArn output
+#   AWS_REGION          - region for loop8-landing/terraform's var.aws_region
+#   TF_STATE_BUCKET     - Task 1 bootstrap's StateBucketName output
+# (same GitHub variable names terraform/bootstrap/README.md uses for the
+# product stack's own equivalents - see loop8-landing/bootstrap/README.md.)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "loop8-landing/terraform/**"
+      - "loop8-landing/backend/**"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: loop8-landing-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    environment: loop8-landing
+    defaults:
+      run:
+        working-directory: loop8-landing/terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-loop8-landing-deploy-${{ github.run_id }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: latest
+
+      - name: Build Lambda package
+        # api.tf's data.archive_file.lambda_placeholder zips whatever is in
+        # lambda_placeholder/ at plan/apply time - the same "stage a dir,
+        # let archive_file zip it" split terraform.yml's own "Build Lambda
+        # package" step uses for the product's Lambdas. Task 3's real
+        # handler now exists, so overwrite the stub in place rather than
+        # repointing api.tf's source_dir - exactly the second option that
+        # data block's own comment calls out ("or have Task 5's CI
+        # build/upload the real package over this one"). handler.py has no
+        # third-party imports (only boto3, provided by the Lambda runtime,
+        # and the stdlib), so no dependency vendoring step is needed here.
+        run: cp ../backend/handler.py lambda_placeholder/handler.py
+
+      - name: Init
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="key=loop8-landing/terraform.tfstate" \
+            -backend-config="region=${{ vars.AWS_REGION }}"
+
+      - name: Apply
+        run: terraform apply -input=false -auto-approve
