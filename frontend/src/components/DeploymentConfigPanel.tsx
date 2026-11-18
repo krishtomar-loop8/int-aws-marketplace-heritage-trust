@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import { type ConfigField, fetchConfig, updateConfig } from "../api";
 import { MOCK_CONFIG } from "../mock";
 
-// The Deployment Config tab — the 13 business-config fields the scheduled
+// The Deployment Config tab — the 14 business-config fields the scheduled
 // Lambdas (AML Export, Quarterly Reports, SharePoint crawler) and the Matter
 // Search agent read, grouped by which Lambda consumes them (see design spec
 // §5). Visible to everyone, like Integrations — isAdmin gates only the edit
@@ -43,6 +43,7 @@ const SECTIONS: Section[] = [
     blurb: "Read by the Matter Search agent when synthesizing a status file and scoping SharePoint.",
     fields: [
       { name: "org_name", label: "Organization name" },
+      { name: "admin_email", label: "Admin email" },
       { name: "org_office_address", label: "Office address" },
       {
         name: "excluded_sharepoint_folders",

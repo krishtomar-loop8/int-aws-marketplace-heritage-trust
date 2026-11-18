@@ -98,6 +98,7 @@ module "search_api" {
   ab_runner_enabled = var.ab_runner_enabled
   # Per-deployment org identity + SharePoint folder exclusions.
   org_name                    = var.org_name
+  admin_email                 = var.admin_email
   org_office_address          = var.org_office_address
   excluded_sharepoint_folders = var.excluded_sharepoint_folders
   # Connector onboarding: the Setup screen's redirect target (prefer the

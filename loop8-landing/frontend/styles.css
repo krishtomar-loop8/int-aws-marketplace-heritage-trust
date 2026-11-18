@@ -1,0 +1,126 @@
+/* Loop8 landing page — the AWS Marketplace fulfillment/subscribe flow.
+   Minimal styling; loosely nods to Aphrodite's own forest-green palette
+   (frontend/src/styles.css) without inheriting its full design system —
+   this is Loop8's own branding context, not the product's. */
+
+:root {
+  --forest: #123c34;
+  --forest-2: #0d2b26;
+  --paper: #f7f3ea;
+  --ink: #17211f;
+  --line: #ddd6c6;
+  --flag: #8a2b26;
+  --flag-bg: #f4e6e1;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  padding: 1.5rem;
+}
+
+.card {
+  width: 100%;
+  max-width: 440px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 2rem;
+}
+
+h1 {
+  margin: 0 0 0.5rem;
+  font-size: 1.4rem;
+  color: var(--forest);
+}
+
+.subtitle {
+  margin: 0 0 1.5rem;
+  color: #45514d;
+  font-size: 0.95rem;
+}
+
+label {
+  display: block;
+  font-weight: 600;
+  font-size: 0.9rem;
+  margin: 1rem 0 0.3rem;
+}
+
+input[type="text"],
+input[type="email"] {
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 1rem;
+  font-family: inherit;
+}
+
+input[type="text"]:focus,
+input[type="email"]:focus {
+  outline: 2px solid var(--forest);
+  outline-offset: 1px;
+}
+
+button[type="submit"] {
+  margin-top: 1.5rem;
+  width: 100%;
+  padding: 0.65rem 1rem;
+  background: var(--forest);
+  color: #f4f1e8;
+  border: 1px solid var(--forest);
+  border-radius: 4px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button[type="submit"]:hover {
+  background: var(--forest-2);
+}
+
+button[type="submit"]:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.result {
+  margin-top: 0.5rem;
+}
+
+.result.success p {
+  margin: 0 0 1rem;
+}
+
+.result.error {
+  color: var(--flag);
+  background: var(--flag-bg);
+  border: 1px solid var(--flag);
+  border-radius: 4px;
+  padding: 0.9rem 1rem;
+}
+
+.launch-link {
+  display: inline-block;
+  padding: 0.65rem 1rem;
+  background: var(--forest);
+  color: #f4f1e8;
+  text-decoration: none;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.launch-link:hover {
+  background: var(--forest-2);
+}

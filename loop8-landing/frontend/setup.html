@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Set up Aphrodite</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="card">
+    <h1>Set up Aphrodite</h1>
+    <p class="subtitle">
+      Tell us a bit about your organization so we can generate your
+      CloudFormation launch link.
+    </p>
+
+    <form id="setup-form" hidden>
+      <label for="company_name">Company name</label>
+      <input type="text" id="company_name" name="company_name" required />
+
+      <label for="admin_email">Admin email</label>
+      <input type="email" id="admin_email" name="admin_email" required />
+
+      <button type="submit">Continue</button>
+    </form>
+
+    <div id="result" class="result" hidden></div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,328 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Aphrodite Marketplace landing page - one-time bootstrap for Loop8's OWN AWS
+  account (separate from any customer-deployed Aphrodite account). Creates the
+  Terraform remote-state S3 bucket (S3 native locking, no DynamoDB), the GitHub
+  Actions OIDC provider, and a single IAM deploy role assumed by GitHub Actions
+  via OIDC, scoped to the resources the loop8-landing/terraform stack creates
+  (DynamoDB, S3, CloudFront, API Gateway, Lambda, scoped IAM, Route 53, ACM).
+  Apply once via assisted AWS CLI; outputs feed the Terraform backend + repo
+  variables used by the loop8-landing GitHub Actions workflows.
+
+Parameters:
+  GitHubOrg:
+    Type: String
+    Description: GitHub organization that owns the repo.
+  GitHubRepo:
+    Type: String
+    Description: GitHub repository name allowed to assume the deploy role.
+
+Resources:
+  # --- Terraform remote state bucket (S3 native locking; no DynamoDB) ---
+  TerraformStateBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "loop8-landing-tfstate-${AWS::AccountId}-${AWS::Region}"
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-noncurrent-state-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 90
+      Tags:
+        - Key: Project
+          Value: aphrodite-landing
+        - Key: ManagedBy
+          Value: cloudformation-bootstrap
+
+  TerraformStateBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref TerraformStateBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt TerraformStateBucket.Arn
+              - !Sub "${TerraformStateBucket.Arn}/*"
+            Condition:
+              Bool:
+                "aws:SecureTransport": "false"
+
+  # --- GitHub Actions OIDC provider ---
+  # Thumbprints are no longer enforced by AWS (GitHub's CA is trusted), but the
+  # CloudFormation resource still requires the property; both known values are listed.
+  # NOTE: an AWS account may only have one OIDC provider per issuer URL. If Loop8's
+  # account already has a token.actions.githubusercontent.com provider from another
+  # project, remove this resource and set TerraformDeployRole's trust policy
+  # Federated principal to that existing provider's ARN instead (see README.md).
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
+      Tags:
+        - Key: Project
+          Value: aphrodite-landing
+
+  # --- IAM deploy role assumed by GitHub Actions ---
+  TerraformDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: loop8-landing-gha-terraform-deploy
+      Description: >-
+        Assumed by GitHub Actions (OIDC) to run Terraform plan/apply for the
+        loop8-landing/ Marketplace landing stack in Loop8's own AWS account.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubOIDCProvider
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                "token.actions.githubusercontent.com:aud": sts.amazonaws.com
+              StringLike:
+                "token.actions.githubusercontent.com:sub": !Sub "repo:${GitHubOrg}/${GitHubRepo}:*"
+      # Curated inline policies (no broad AWS-managed policy, and no blanket
+      # "service:*" actions) - enumerates only the actions the loop8-landing/
+      # Terraform stack actually needs: Terraform-state S3 access, the static
+      # site + installer-mirror S3 buckets, CloudFront, API Gateway (HTTP API),
+      # Lambda, DynamoDB, Route 53 (records in the existing loop8.io zone),
+      # and ACM. IAM is scoped to the /loop8-landing/ path below.
+      Policies:
+        - PolicyName: landing-stack-services
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: TerraformStateAndSiteS3
+                Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:DeleteBucket
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                  - s3:GetBucketVersioning
+                  - s3:PutBucketVersioning
+                  - s3:GetBucketPolicy
+                  - s3:PutBucketPolicy
+                  - s3:DeleteBucketPolicy
+                  - s3:GetBucketPublicAccessBlock
+                  - s3:PutBucketPublicAccessBlock
+                  - s3:GetBucketObjectLockConfiguration
+                  - s3:GetEncryptionConfiguration
+                  - s3:PutEncryptionConfiguration
+                  - s3:GetBucketOwnershipControls
+                  - s3:PutBucketOwnershipControls
+                  - s3:GetLifecycleConfiguration
+                  - s3:PutLifecycleConfiguration
+                  - s3:GetBucketCORS
+                  - s3:PutBucketCORS
+                  - s3:GetBucketTagging
+                  - s3:PutBucketTagging
+                  - s3:GetBucketLogging
+                  - s3:GetBucketWebsite
+                  - s3:GetBucketAcl
+                  - s3:GetAccelerateConfiguration
+                  - s3:GetBucketRequestPayment
+                  - s3:GetReplicationConfiguration
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:GetObjectVersion
+                  - s3:DeleteObjectVersion
+                Resource: "*"
+              - Sid: CloudFrontDistributionAndOac
+                Effect: Allow
+                Action:
+                  - cloudfront:CreateDistribution
+                  - cloudfront:GetDistribution
+                  - cloudfront:UpdateDistribution
+                  - cloudfront:DeleteDistribution
+                  - cloudfront:GetDistributionConfig
+                  - cloudfront:ListDistributions
+                  - cloudfront:TagResource
+                  - cloudfront:UntagResource
+                  - cloudfront:ListTagsForResource
+                  - cloudfront:CreateOriginAccessControl
+                  - cloudfront:GetOriginAccessControl
+                  - cloudfront:UpdateOriginAccessControl
+                  - cloudfront:DeleteOriginAccessControl
+                  - cloudfront:CreateInvalidation
+                Resource: "*"
+              - Sid: ApiGatewayHttpApi
+                Effect: Allow
+                Action:
+                  # API Gateway's IAM action vocabulary is HTTP-verb-based (no
+                  # named CreateApi/TagResource actions) - PUT/PATCH/DELETE on
+                  # /tags/* cover tagging and untagging the resources below.
+                  - apigateway:GET
+                  - apigateway:POST
+                  - apigateway:PUT
+                  - apigateway:PATCH
+                  - apigateway:DELETE
+                Resource:
+                  - !Sub "arn:aws:apigateway:${AWS::Region}::/apis"
+                  - !Sub "arn:aws:apigateway:${AWS::Region}::/apis/*"
+                  - !Sub "arn:aws:apigateway:${AWS::Region}::/domainnames"
+                  - !Sub "arn:aws:apigateway:${AWS::Region}::/domainnames/*"
+                  - !Sub "arn:aws:apigateway:${AWS::Region}::/tags/*"
+              - Sid: LambdaFunction
+                Effect: Allow
+                Action:
+                  - lambda:CreateFunction
+                  - lambda:DeleteFunction
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                  - lambda:GetFunctionCodeSigningConfig
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+                  - lambda:AddPermission
+                  - lambda:RemovePermission
+                  - lambda:GetPolicy
+                  - lambda:ListVersionsByFunction
+                  - lambda:PublishVersion
+                  - lambda:TagResource
+                  - lambda:UntagResource
+                  - lambda:ListTags
+                Resource: "*"
+              - Sid: DynamoDbSubscriptionsTable
+                Effect: Allow
+                Action:
+                  - dynamodb:CreateTable
+                  - dynamodb:DeleteTable
+                  - dynamodb:DescribeTable
+                  - dynamodb:UpdateTable
+                  - dynamodb:TagResource
+                  - dynamodb:UntagResource
+                  - dynamodb:ListTagsOfResource
+                  - dynamodb:UpdateTimeToLive
+                  - dynamodb:DescribeTimeToLive
+                  - dynamodb:UpdateContinuousBackups
+                  - dynamodb:DescribeContinuousBackups
+                Resource: "*"
+              - Sid: Route53ExistingZone
+                Effect: Allow
+                Action:
+                  - route53:GetHostedZone
+                  - route53:ListHostedZones
+                  - route53:ListHostedZonesByName
+                  - route53:ListResourceRecordSets
+                  - route53:ChangeResourceRecordSets
+                  - route53:GetChange
+                  - route53:ListTagsForResource
+                Resource: "*"
+              - Sid: AcmCertificates
+                Effect: Allow
+                Action:
+                  - acm:RequestCertificate
+                  - acm:DescribeCertificate
+                  - acm:GetCertificate
+                  - acm:DeleteCertificate
+                  - acm:AddTagsToCertificate
+                  - acm:RemoveTagsFromCertificate
+                  - acm:ListTagsForCertificate
+                Resource: "*"
+              - Sid: LambdaAndApiGatewayLogGroups
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:DeleteLogGroup
+                  - logs:DescribeLogGroups
+                  - logs:PutRetentionPolicy
+                  - logs:TagResource
+                  - logs:UntagResource
+                  - logs:ListTagsForResource
+                Resource: "*"
+              - Sid: TerraformPlanSupport
+                Effect: Allow
+                Action:
+                  - sts:GetCallerIdentity
+                  - tag:GetResources
+                  - tag:TagResources
+                  - tag:UntagResources
+                Resource: "*"
+        - PolicyName: landing-iam-scoped
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ManageProjectScopedIamResources
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:UpdateRole
+                  - iam:UpdateRoleDescription
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:CreatePolicy
+                  - iam:DeletePolicy
+                  - iam:CreatePolicyVersion
+                  - iam:DeletePolicyVersion
+                  - iam:TagPolicy
+                  - iam:UntagPolicy
+                  - iam:PassRole
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/loop8-landing/*"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:policy/loop8-landing/*"
+              - Sid: ReadIamForTerraformPlan
+                Effect: Allow
+                Action:
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:GetPolicy
+                  - iam:GetPolicyVersion
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListPolicyVersions
+                  - iam:ListInstanceProfilesForRole
+                  - iam:CreateServiceLinkedRole
+                Resource: "*"
+      Tags:
+        - Key: Project
+          Value: aphrodite-landing
+
+Outputs:
+  StateBucketName:
+    Description: S3 bucket for Terraform remote state (set as TF_STATE_BUCKET).
+    Value: !Ref TerraformStateBucket
+  DeployRoleArn:
+    Description: IAM role ARN for GitHub Actions OIDC (set as AWS_DEPLOY_ROLE_ARN).
+    Value: !GetAtt TerraformDeployRole.Arn
+  OIDCProviderArn:
+    Description: GitHub Actions OIDC provider ARN.
+    Value: !Ref GitHubOIDCProvider
+  Region:
+    Description: Region the bootstrap was deployed to (set as AWS_REGION).
+    Value: !Ref AWS::Region
