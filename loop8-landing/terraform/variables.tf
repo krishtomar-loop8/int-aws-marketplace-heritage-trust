@@ -4,11 +4,12 @@ variable "aws_region" {
   description = <<-EOT
     AWS region for the landing stack (Loop8's own account — unrelated to the
     customer-deployed product's data-residency region choice, since this
-    stack holds no customer operational data). Defaults to us-east-1 so the
-    CloudFront ACM certificate (which must be us-east-1) can also serve the
-    API Gateway custom domain's regional certificate, avoiding a second ACM
-    cert + DNS validation round trip. Overriding this mints a second,
-    region-local cert for the API domain instead (see api.tf).
+    stack holds no customer operational data). CloudFront's ACM certificate
+    (site.tf) always lives in us-east-1 regardless of this value; the API
+    Gateway custom domain's certificate (api.tf) always lives in this
+    region — the two are separate certificates for separate hostnames
+    either way, so this is a free choice of where the rest of the stack
+    (API Gateway, Lambda, DynamoDB) runs.
   EOT
 }
 

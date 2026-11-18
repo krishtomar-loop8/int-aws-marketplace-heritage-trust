@@ -87,6 +87,19 @@ resource "aws_lambda_function" "api" {
 resource "aws_apigatewayv2_api" "api" {
   name          = "loop8-landing-api"
   protocol_type = "HTTP"
+
+  # The frontend (deploy.loop8.io) calls this API cross-origin
+  # (api.deploy.loop8.io is a different subdomain), so the browser's preflight
+  # OPTIONS request needs an answer — API Gateway handles OPTIONS
+  # automatically from this block, same mechanism
+  # terraform/modules/search_api/main.tf's HTTP API uses for its own
+  # cross-origin SPA calls.
+  cors_configuration {
+    allow_origins = ["https://${var.site_domain}"]
+    allow_methods = ["POST", "OPTIONS"]
+    allow_headers = ["content-type"]
+    max_age       = 3600
+  }
 }
 
 resource "aws_apigatewayv2_integration" "api" {
@@ -129,13 +142,15 @@ resource "aws_lambda_permission" "apigw" {
 # -- custom domain for the API ----------------------------------------------
 # HTTP API custom domains are REGIONAL only (no edge-optimized option), so
 # the certificate must live in the API's own region (var.aws_region) — not
-# necessarily us-east-1. When var.aws_region is left at its us-east-1 default,
-# that's the exact same region as the CloudFront cert above, so we reuse it
-# instead of minting a second cert + DNS validation. Overriding aws_region to
-# anything else mints a second, region-local cert here.
+# necessarily us-east-1. A certificate only covers the exact hostname(s) it
+# was issued for, so this domain (api.deploy.loop8.io) needs its own
+# certificate regardless of region — it cannot reuse site.tf's cert, which
+# was issued only for deploy.loop8.io. Always provision a dedicated cert here
+# (simpler and more robust than conditionally sharing one cert across two
+# different hostnames via SANs); ACM certificates are free, so there's no
+# cost reason to share one.
 
 resource "aws_acm_certificate" "api" {
-  count             = var.aws_region == "us-east-1" ? 0 : 1
   domain_name       = var.api_domain
   validation_method = "DNS"
 
@@ -145,8 +160,8 @@ resource "aws_acm_certificate" "api" {
 }
 
 resource "aws_route53_record" "api_validation" {
-  for_each = var.aws_region == "us-east-1" ? {} : {
-    for dvo in aws_acm_certificate.api[0].domain_validation_options : dvo.domain_name => {
+  for_each = {
+    for dvo in aws_acm_certificate.api.domain_validation_options : dvo.domain_name => {
       name   = dvo.resource_record_name
       type   = dvo.resource_record_type
       record = dvo.resource_record_value
@@ -162,20 +177,15 @@ resource "aws_route53_record" "api_validation" {
 }
 
 resource "aws_acm_certificate_validation" "api" {
-  count                   = var.aws_region == "us-east-1" ? 0 : 1
-  certificate_arn         = aws_acm_certificate.api[0].arn
+  certificate_arn         = aws_acm_certificate.api.arn
   validation_record_fqdns = [for r in aws_route53_record.api_validation : r.fqdn]
-}
-
-locals {
-  api_certificate_arn = var.aws_region == "us-east-1" ? aws_acm_certificate_validation.site.certificate_arn : aws_acm_certificate_validation.api[0].certificate_arn
 }
 
 resource "aws_apigatewayv2_domain_name" "api" {
   domain_name = var.api_domain
 
   domain_name_configuration {
-    certificate_arn = local.api_certificate_arn
+    certificate_arn = aws_acm_certificate_validation.api.certificate_arn
     endpoint_type   = "REGIONAL"
     security_policy = "TLS_1_2"
   }

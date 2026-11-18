@@ -34,10 +34,10 @@ provider "aws" {
 }
 
 # CloudFront's ACM certificate must live in us-east-1 regardless of where the
-# rest of the stack runs. var.aws_region defaults to us-east-1 (see
-# variables.tf) specifically so this alias and the default provider target
-# the same region, letting the API Gateway custom domain's regional
-# certificate (api.tf) reuse this cert instead of minting a second one.
+# rest of the stack runs (see site.tf). The API Gateway custom domain's own
+# certificate (api.tf) is a separate certificate, always requested in
+# var.aws_region — the two never need to be the same cert since they cover
+# different hostnames.
 provider "aws" {
   alias  = "us_east_1"
   region = "us-east-1"
