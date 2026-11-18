@@ -20,6 +20,7 @@ on:
     paths:
       - "loop8-landing/terraform/**"
       - "loop8-landing/backend/**"
+      - "loop8-landing/frontend/**"
   workflow_dispatch:
 
 permissions:
@@ -74,3 +75,19 @@ jobs:
 
       - name: Apply
         run: terraform apply -input=false -auto-approve
+
+      - name: Deploy static site
+        # loop8-landing/frontend is plain static HTML/JS/CSS (no build step,
+        # unlike the product's React SPA), so sync it straight into the
+        # site bucket site.tf creates. Same sync + invalidate pattern as
+        # terraform.yml's own "Build & deploy SPA" step
+        # (`aws s3 sync ... --delete` + `aws cloudfront create-invalidation`),
+        # reading the bucket/distribution id from this apply's own outputs
+        # rather than hardcoding them (outputs.tf's site_bucket /
+        # site_distribution_id exist specifically for this).
+        run: |
+          set -euo pipefail
+          BUCKET=$(terraform output -raw site_bucket)
+          DIST_ID=$(terraform output -raw site_distribution_id)
+          aws s3 sync ../frontend/ "s3://$BUCKET/" --delete
+          aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths "/*"
