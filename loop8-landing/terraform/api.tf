@@ -75,7 +75,10 @@ resource "aws_lambda_function" "api" {
 
   environment {
     variables = {
-      SUBSCRIPTIONS_TABLE = aws_dynamodb_table.subscriptions.name
+      SUBSCRIPTIONS_TABLE    = aws_dynamodb_table.subscriptions.name
+      LAUNCH_REGION          = var.launch_region
+      LAUNCH_STACK_NAME      = var.launch_stack_name
+      INSTALLER_TEMPLATE_URL = "https://${aws_s3_bucket.installer_mirror.bucket_regional_domain_name}/installer/latest/installer.yaml"
     }
   }
 

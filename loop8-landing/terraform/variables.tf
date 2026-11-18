@@ -30,3 +30,15 @@ variable "api_domain" {
   default     = "api.deploy.loop8.io"
   description = "Custom domain for the fulfillment/subscribe HTTP API."
 }
+
+variable "launch_region" {
+  type        = string
+  default     = "ca-central-1"
+  description = "Region the buyer's CloudFormation launch-link defaults to (the customer-deployed product's region, unrelated to var.aws_region above)."
+}
+
+variable "launch_stack_name" {
+  type        = string
+  default     = "Aphrodite"
+  description = "Default CloudFormation stack name pre-filled in the buyer's launch link."
+}
