@@ -43,16 +43,6 @@ export function friendlyError(raw?: string, isFriendly?: boolean): string {
   const s = (raw || "").toLowerCase();
   if (s.includes("timed out") || s.includes("timeout"))
     return "The search took too long to finish — this can happen on very large matters. Please try again.";
-  if (
-    s.includes("throttl") ||
-    s.includes("overload") ||
-    s.includes("serviceunavailable") ||
-    s.includes("too many requests") ||
-    s.includes("connection failed")
-  )
-    return "The AI service was busy. Please try again in a moment.";
-  if (s.includes("converse failed") || s.includes("bedrock"))
-    return "The AI service had a problem generating this summary. Please try again.";
   return "Something went wrong running this search. Please try again.";
 }
 

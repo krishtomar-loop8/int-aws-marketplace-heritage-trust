@@ -326,7 +326,22 @@ whether each panel keeps its own `setError(e.message)` now that `e.message` itse
 carry the backend's specific reason (prefer the latter — smaller diff, consistent with the
 Non-goals' "don't redesign the visual language" — and consistent with the "Coordination across
 phases" resolution: every panel should read `error`/`error_is_friendly` the same way, not
-necessarily call one shared function).
+necessarily call one shared function). **Carried forward from Phase 4's final review (both
+explicitly non-blocking copy items, not defects — bundle into this phase's consistency pass rather
+than fix piecemeal):** (1) Phase 4's `AccessDeniedException` message says "isn't enabled in this
+region" with more certainty than is always warranted — the real cause can also be a missing
+`bedrock:InvokeModel` grant on the model/inference-profile ARN, an SCP denying the region, or (per
+CLAUDE.md's cross-region inference-profile option) a missing grant in the *destination* region, not
+the deployment region. The installer's own pre-flight message already hedges this correctly ("is
+not accessible in `<region>`") — Phase 6 should reconcile `services/errors.py`'s Bedrock-branch
+wording with `installer/deploy.sh`'s wording so both say the same, appropriately-hedged thing (and
+check in passing whether AWS's Bedrock "Model access" console page is still named that — it has
+moved before). (2) The missing-sections banner (Phase 4, `StatusReport.tsx`) can name
+`sources_reviewed` as missing even though that section always renders regardless (it's
+platform-generated from the dossier, not model-dependent) — low-frequency since the synthesis
+prompt asks the model to include it, but worth filtering `sources_reviewed` out of the banner's
+list when `answer.sources_reviewed` is non-empty, while Phase 6 is already touching this kind of
+display-consistency logic.
 
 ## What's left to the builder (plan-level, across all phases)
 
