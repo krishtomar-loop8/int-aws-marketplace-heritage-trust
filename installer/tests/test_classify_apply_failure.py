@@ -49,15 +49,21 @@ def test_account_billing_hold_is_classified():
     assert "billing" in msg.lower() or "account" in msg.lower()
 
 def test_iam_access_denied_is_classified():
-    msg = _classify("Error: creating IAM Role: AccessDenied: User is not authorized to perform iam:CreateRole")
+    msg = _classify(
+        "Error: creating IAM Role: AccessDenied: User is not authorized to perform iam:CreateRole"
+    )
     assert "permission" in msg.lower() or "iam" in msg.lower()
 
 def test_unauthorized_operation_is_classified():
-    msg = _classify("Error: UnauthorizedOperation: You are not authorized to perform this operation")
+    msg = _classify(
+        "Error: UnauthorizedOperation: You are not authorized to perform this operation"
+    )
     assert "permission" in msg.lower() or "iam" in msg.lower()
 
 def test_unrecognized_failure_returns_empty():
-    msg = _classify("Error: creating S3 Bucket: BucketAlreadyExists: the requested bucket name is not available")
+    msg = _classify(
+        "Error: creating S3 Bucket: BucketAlreadyExists: the requested bucket name is not available"
+    )
     assert msg == ""
 
 def test_empty_output_returns_empty():
