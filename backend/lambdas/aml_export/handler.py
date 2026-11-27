@@ -134,7 +134,7 @@ def _build_deps() -> Deps:
             return
         sns.publish(
             TopicArn=topic_arn,
-            Subject=f"AML export run failed — {context}",
+            Subject="AML export run failed",
             Message=f"The monthly AML name export failed before completing.\n\n{context}: {error}",
         )
 

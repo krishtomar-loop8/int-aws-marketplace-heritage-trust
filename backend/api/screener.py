@@ -279,7 +279,7 @@ def _is_bundle_stale(
         return True
     try:
         generated = datetime.fromisoformat(generated_at)
-    except ValueError:
+    except (TypeError, ValueError):
         return True
     if generated.tzinfo is None:
         generated = generated.replace(tzinfo=UTC)

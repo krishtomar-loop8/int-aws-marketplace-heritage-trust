@@ -168,7 +168,7 @@ def _build_deps() -> Deps:
             return
         sns.publish(
             TopicArn=topic_arn,
-            Subject=f"Quarterly report run failed — {context}",
+            Subject="Quarterly report run failed",
             Message=(
                 f"The quarterly report generator failed before completing.\n\n{context}: {error}"
             ),

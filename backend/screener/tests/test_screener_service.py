@@ -188,6 +188,10 @@ def test_malformed_generated_at_is_treated_as_stale():
     assert _is_bundle_stale("not-a-date", now=now) is True
 
 
+def test_non_string_generated_at_is_treated_as_stale():
+    assert _is_bundle_stale(123, now=datetime.now(UTC)) is True
+
+
 def test_screen_flags_stale_bundle(mock_sanctions_data):
     svc = _service(mock_sanctions_data)
     svc.bundle_generated_at = "2020-01-01T00:00:00+00:00"
