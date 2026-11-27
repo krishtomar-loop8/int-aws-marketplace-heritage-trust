@@ -82,6 +82,7 @@ class Deps:
     generator: ReportGenerator
     storage: ReportStorage
     notify: Callable[..., None]
+    notify_failure: Callable[[str, str], None]
     # Optional SharePoint delivery (scheduled runs only) + inter-matter pacing.
     delivery: SharePointDelivery | None = None
     delay_seconds: float = 0.0
@@ -162,10 +163,22 @@ def _build_deps() -> Deps:
             ),
         )
 
+    def notify_failure(context: str, error: str) -> None:
+        if not sns:
+            return
+        sns.publish(
+            TopicArn=topic_arn,
+            Subject=f"Quarterly report run failed — {context}",
+            Message=(
+                f"The quarterly report generator failed before completing.\n\n{context}: {error}"
+            ),
+        )
+
     return Deps(
         generator,
         storage,
         notify,
+        notify_failure,
         delivery=_build_delivery(secrets),
         delay_seconds=float(os.environ.get("APHRODITE_QUARTERLY_MATTER_DELAY_SECONDS", "1.2")),
         clio=clio,
@@ -298,83 +311,98 @@ def _resolve_letter_date(event: dict[str, Any], *, today: date) -> date:
 
 def handler(event: dict[str, Any] | None = None, context: Any = None) -> dict[str, Any]:
     event = event or {}
-    deps = _with_current_config(_get_deps())
-    now = datetime.now(UTC)
-    today = now.date()
+    base_deps = _get_deps()
+    try:
+        deps = _with_current_config(base_deps)
+        now = datetime.now(UTC)
+        today = now.date()
 
-    period = _resolve_period(event, today=today)
-    letter_date = _resolve_letter_date(event, today=today)
-    generated_at = now.isoformat()
+        period = _resolve_period(event, today=today)
+        letter_date = _resolve_letter_date(event, today=today)
+        generated_at = now.isoformat()
 
-    # Selection: explicit ids (portal) win; else discover by practice area on
-    # scheduled runs; else the env fallback list. discover_only lists the set
-    # without generating (validation probe).
-    explicit_ids = event.get("matter_ids")
-    discover_only = bool(event.get("discover_only") or event.get("dry_run"))
-    discover = discover_only or (bool(event.get("discover")) and not explicit_ids)
-    selection = _discover(deps) if discover else None
+        # Selection: explicit ids (portal) win; else discover by practice area on
+        # scheduled runs; else the env fallback list. discover_only lists the set
+        # without generating (validation probe).
+        explicit_ids = event.get("matter_ids")
+        discover_only = bool(event.get("discover_only") or event.get("dry_run"))
+        discover = discover_only or (bool(event.get("discover")) and not explicit_ids)
+        selection = _discover(deps) if discover else None
 
-    if discover_only and selection is not None:
+        if discover_only and selection is not None:
+            logger.info(
+                "discover-only run",
+                extra={
+                    "extra_fields": {
+                        "selected": len(selection.selected),
+                        "flagged_no_practice_area": len(selection.flagged_no_area),
+                        "excluded": len(selection.excluded),
+                    }
+                },
+            )
+            return {"period": period.code, "mode": "discover_only", **selection.as_dict()}
+
+        matter_ids = (
+            selection.selected_ids if selection is not None else _resolve_matter_ids(event)
+        )
+
+        if not matter_ids:
+            logger.warning("no matter_ids configured; nothing to generate")
+            result: dict[str, Any] = {
+                "period": period.code,
+                "generated": [],
+                "failed": [],
+                "skipped": "no_matters",
+            }
+            if selection is not None:
+                result["flagged_no_practice_area"] = [
+                    r.as_dict() for r in selection.flagged_no_area
+                ]
+            return result
+
+        # SharePoint delivery is opt-in per invocation (scheduled runs set it), and only
+        # when a publisher was configured. On-demand portal generation stays S3-only.
+        deliver = deps.delivery is not None and bool(event.get("sharepoint"))
+
         logger.info(
-            "discover-only run",
+            "generating quarterly drafts",
             extra={
                 "extra_fields": {
-                    "selected": len(selection.selected),
-                    "flagged_no_practice_area": len(selection.flagged_no_area),
-                    "excluded": len(selection.excluded),
+                    "period": period.code,
+                    "matter_count": len(matter_ids),
+                    "sharepoint": deliver,
                 }
             },
         )
-        return {"period": period.code, "mode": "discover_only", **selection.as_dict()}
 
-    matter_ids = selection.selected_ids if selection is not None else _resolve_matter_ids(event)
+        results: list[dict[str, Any]] = []
+        for index, matter_id in enumerate(matter_ids):
+            if index and deps.delay_seconds:
+                deps.sleep(deps.delay_seconds)  # pace the source APIs (Clio ~50 req/min)
+            results.append(
+                _generate_one(deps, matter_id, period, letter_date, generated_at, deliver=deliver)
+            )
 
-    if not matter_ids:
-        logger.warning("no matter_ids configured; nothing to generate")
-        result: dict[str, Any] = {
+        flagged = selection.flagged_no_area if selection is not None else None
+        deps.notify(period, results, flagged=flagged)
+        out: dict[str, Any] = {
             "period": period.code,
-            "generated": [],
-            "failed": [],
-            "skipped": "no_matters",
+            "generated": [r["matter"] for r in results if r["ok"]],
+            "failed": [
+                {"matter": r["matter"], "error": r["error"]} for r in results if not r["ok"]
+            ],
+            "sharepoint_uploaded": [r["matter"] for r in results if r.get("sharepoint") == "ok"],
         }
         if selection is not None:
-            result["flagged_no_practice_area"] = [r.as_dict() for r in selection.flagged_no_area]
-        return result
-
-    # SharePoint delivery is opt-in per invocation (scheduled runs set it), and only
-    # when a publisher was configured. On-demand portal generation stays S3-only.
-    deliver = deps.delivery is not None and bool(event.get("sharepoint"))
-
-    logger.info(
-        "generating quarterly drafts",
-        extra={
-            "extra_fields": {
-                "period": period.code,
-                "matter_count": len(matter_ids),
-                "sharepoint": deliver,
-            }
-        },
-    )
-
-    results: list[dict[str, Any]] = []
-    for index, matter_id in enumerate(matter_ids):
-        if index and deps.delay_seconds:
-            deps.sleep(deps.delay_seconds)  # pace the source APIs (Clio ~50 req/min)
-        results.append(
-            _generate_one(deps, matter_id, period, letter_date, generated_at, deliver=deliver)
-        )
-
-    flagged = selection.flagged_no_area if selection is not None else None
-    deps.notify(period, results, flagged=flagged)
-    out: dict[str, Any] = {
-        "period": period.code,
-        "generated": [r["matter"] for r in results if r["ok"]],
-        "failed": [{"matter": r["matter"], "error": r["error"]} for r in results if not r["ok"]],
-        "sharepoint_uploaded": [r["matter"] for r in results if r.get("sharepoint") == "ok"],
-    }
-    if selection is not None:
-        out["flagged_no_practice_area"] = [r.as_dict() for r in selection.flagged_no_area]
-    return out
+            out["flagged_no_practice_area"] = [r.as_dict() for r in selection.flagged_no_area]
+        return out
+    except Exception as exc:
+        logger.exception("quarterly report run failed before completion")
+        try:
+            base_deps.notify_failure("quarterly report run", str(exc))
+        except Exception:  # noqa: BLE001 - never let the alert itself mask the real failure
+            logger.exception("notify_failure itself failed")
+        raise
 
 
 def _discover(deps: Deps) -> Selection:
