@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
+
 from backend.lambdas.quarterly_report import handler as H
 from backend.lambdas.quarterly_report.generator import ReportDataError
 from backend.lambdas.quarterly_report.handler import Deps
@@ -73,18 +75,22 @@ def _install(
     monkeypatch, generator, storage, *, delivery=None, sleep=None, delay=0.0, **deps_kwargs
 ):
     notifications = []
+    failures = []
     extra = {"sleep": sleep} if sleep is not None else {}
     deps = Deps(
         generator=generator,
         storage=storage,
         notify=lambda p, r, flagged=None: notifications.append((p, r, flagged)),
+        notify_failure=deps_kwargs.pop(
+            "notify_failure", lambda context, error: failures.append((context, error))
+        ),
         delivery=delivery,
         delay_seconds=delay,
         **extra,
         **deps_kwargs,
     )
     monkeypatch.setattr(H, "_DEPS", deps)
-    return notifications
+    return notifications, failures
 
 
 def test_resolve_period_default_is_previous_quarter():
@@ -111,7 +117,7 @@ def test_resolve_letter_date():
 
 def test_handler_generates_each_matter_and_notifies(monkeypatch):
     gen, store = FakeGenerator(), FakeStorage()
-    notifications = _install(monkeypatch, gen, store)
+    notifications, _ = _install(monkeypatch, gen, store)
 
     result = H.handler({"matter_ids": ["100001", "100002"], "period": {"year": 2026, "quarter": 1}})
 
@@ -139,11 +145,53 @@ def test_handler_isolates_per_matter_failure(monkeypatch):
 
 def test_handler_noop_when_no_matters(monkeypatch):
     monkeypatch.delenv("APHRODITE_QUARTERLY_MATTER_IDS", raising=False)
-    notifications = _install(monkeypatch, FakeGenerator(), FakeStorage())
+    notifications, _ = _install(monkeypatch, FakeGenerator(), FakeStorage())
     result = H.handler({})
     assert result["skipped"] == "no_matters"
     assert result["generated"] == []
     assert notifications == []
+
+
+def test_handler_calls_notify_failure_when_discovery_raises(monkeypatch):
+    gen, store = FakeGenerator(), FakeStorage()
+    notifications, failures = _install(monkeypatch, gen, store)
+
+    def boom(deps):
+        raise RuntimeError("Clio is down")
+
+    monkeypatch.setattr(H, "_discover", boom)
+
+    with pytest.raises(RuntimeError, match="Clio is down"):
+        H.handler({"discover": True})
+
+    assert notifications == []
+    assert len(failures) == 1
+    assert "Clio is down" in failures[0][1]
+
+
+def test_notify_failure_raising_does_not_mask_the_original_exception(monkeypatch):
+    gen, store = FakeGenerator(), FakeStorage()
+
+    def failing_notify_failure(context, error):
+        raise RuntimeError("sns down")
+
+    _install(monkeypatch, gen, store, notify_failure=failing_notify_failure)
+    monkeypatch.setattr(
+        H, "_discover", lambda deps: (_ for _ in ()).throw(RuntimeError("original"))
+    )
+
+    with pytest.raises(RuntimeError, match="original"):
+        H.handler({"discover": True})
+
+
+def test_per_matter_failure_still_uses_normal_notify_not_notify_failure(monkeypatch):
+    gen, store = FakeGenerator(fail_for={"100002"}), FakeStorage()
+    notifications, failures = _install(monkeypatch, gen, store)
+
+    H.handler({"matter_ids": ["100001", "100002"], "period": {"year": 2026, "quarter": 1}})
+
+    assert len(notifications) == 1
+    assert failures == []
 
 
 def test_scheduled_run_delivers_to_sharepoint(monkeypatch):
@@ -231,7 +279,7 @@ def test_discover_selects_qualifying_and_flags_uncategorized(monkeypatch):
             _matter(3, "250003"),  # no practice area, no flag → flagged
         ]
     )
-    notifications = _install(monkeypatch, gen, store, clio=clio, **_DISCOVER_CFG)
+    notifications, _ = _install(monkeypatch, gen, store, clio=clio, **_DISCOVER_CFG)
 
     result = H.handler({"discover": True, "period": {"year": 2026, "quarter": 2}})
 
@@ -246,7 +294,7 @@ def test_discover_selects_qualifying_and_flags_uncategorized(monkeypatch):
 def test_discover_only_lists_without_generating(monkeypatch):
     gen, store = FakeGenerator(), FakeStorage()
     clio = FakeClioList([_matter(1, "250001", "Trustee"), _matter(2, "250002", "Miscellaneous")])
-    notifications = _install(
+    notifications, _ = _install(
         monkeypatch, gen, store, clio=clio,
         qualifying_practice_areas=("Trustee",), exclusion_field="Report Exclusion",
     )

@@ -12,6 +12,19 @@ data "archive_file" "lambda" {
   output_path = "${path.root}/build/aphrodite-sanctions-refresh.zip"
 }
 
+# -- staff notification topic ("refresh failed") ----------------------------
+
+resource "aws_sns_topic" "notify" {
+  name = "aphrodite-sanctions-refresh-notify"
+}
+
+resource "aws_sns_topic_subscription" "emails" {
+  for_each  = toset(var.notify_emails)
+  topic_arn = aws_sns_topic.notify.arn
+  protocol  = "email"
+  endpoint  = each.value
+}
+
 # -- execution role ---------------------------------------------------------
 
 data "aws_iam_policy_document" "assume" {
@@ -47,6 +60,11 @@ data "aws_iam_policy_document" "exec" {
     actions   = ["kms:GenerateDataKey", "kms:Decrypt"]
     resources = [var.kms_key_arn]
   }
+  statement {
+    sid       = "Notify"
+    actions   = ["sns:Publish"]
+    resources = [aws_sns_topic.notify.arn]
+  }
 }
 
 resource "aws_iam_role_policy" "exec" {
@@ -78,6 +96,7 @@ resource "aws_lambda_function" "refresh" {
       APHRODITE_SANCTIONS_BUCKET     = var.reference_bucket
       APHRODITE_SANCTIONS_KEY        = "sanctions/bundle.json"
       APHRODITE_SANCTIONS_KMS_KEY_ID = var.kms_key_arn
+      APHRODITE_NOTIFY_TOPIC_ARN     = aws_sns_topic.notify.arn
     }
   }
 

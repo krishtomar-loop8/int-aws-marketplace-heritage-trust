@@ -23,6 +23,12 @@ variable "kms_key_arn" {
   description = "CMK ARN used to encrypt the bundle at rest (SSE-KMS)."
 }
 
+variable "notify_emails" {
+  type        = list(string)
+  default     = []
+  description = "Internal staff emails subscribed to the 'sanctions refresh failed' SNS topic."
+}
+
 variable "schedule_enabled" {
   type        = bool
   default     = true

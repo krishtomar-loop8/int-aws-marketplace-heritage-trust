@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -34,6 +35,7 @@ class Deps:
     bucket: str
     key: str
     kms_key_id: str | None
+    notify_failure: Callable[[str, dict[str, int] | None], None]
 
 
 _DEPS: Deps | None = None  # cold-start cache / test injection point
@@ -42,11 +44,31 @@ _DEPS: Deps | None = None  # cold-start cache / test injection point
 def _build_deps() -> Deps:
     import boto3
 
+    topic_arn = os.environ.get("APHRODITE_NOTIFY_TOPIC_ARN")
+    sns = boto3.client("sns", region_name=REGION) if topic_arn else None
+
+    def notify_failure(error: str, counts: dict[str, int] | None) -> None:
+        if not sns:
+            return
+        labels = {"un": "UN Consolidated", "sema": "Canada SEMA", "ps": "Public Safety Canada"}
+        detail = ""
+        if counts:
+            lines = "\n".join(
+                f"- {label}: {counts.get(key, 0)} entries" for key, label in labels.items()
+            )
+            detail = f"\n\n{lines}"
+        sns.publish(
+            TopicArn=topic_arn,
+            Subject="Sanctions watchlist refresh failed",
+            Message=f"The monthly sanctions watchlist refresh did not complete.\n\n{error}{detail}",
+        )
+
     return Deps(
         s3=boto3.client("s3", region_name=REGION),
         bucket=os.environ["APHRODITE_SANCTIONS_BUCKET"],
         key=os.environ.get("APHRODITE_SANCTIONS_KEY", "sanctions/bundle.json"),
         kms_key_id=os.environ.get("APHRODITE_SANCTIONS_KMS_KEY_ID"),
+        notify_failure=notify_failure,
     )
 
 
@@ -60,39 +82,50 @@ def _get_deps() -> Deps:
 def handler(event: dict[str, Any] | None = None, context: Any = None) -> dict[str, Any]:
     del event, context
     deps = _get_deps()
+    counts: dict[str, int] | None = None
 
-    from backend.screener import fetcher
+    try:
+        from backend.screener import fetcher
 
-    data = fetcher.fetch_all(force_http=True)
-    un, sema, ps = data["un_list"], data["sema_list"], data["ps_list"]
-    counts = {
-        "un": len(un),
-        "sema": len(sema),
-        "ps": len(ps),
-        "total": len(un) + len(sema) + len(ps),
-    }
+        data = fetcher.fetch_all(force_http=True)
+        un, sema, ps = data["un_list"], data["sema_list"], data["ps_list"]
+        counts = {
+            "un": len(un),
+            "sema": len(sema),
+            "ps": len(ps),
+            "total": len(un) + len(sema) + len(ps),
+        }
 
-    # A partial fetch (some source down) must not clobber a good bundle.
-    if not (un and sema and ps):
-        raise RuntimeError(f"incomplete sanctions fetch, refusing to overwrite bundle: {counts}")
+        # A partial fetch (some source down) must not clobber a good bundle.
+        if not (un and sema and ps):
+            raise RuntimeError(
+                f"incomplete sanctions fetch, refusing to overwrite bundle: {counts}"
+            )
 
-    bundle = {
-        "generated_at": datetime.now(UTC).isoformat(),
-        "counts": counts,
-        "un_list": un,
-        "sema_list": sema,
-        "ps_list": ps,
-    }
-    body = json.dumps(bundle).encode()
+        bundle = {
+            "generated_at": datetime.now(UTC).isoformat(),
+            "counts": counts,
+            "un_list": un,
+            "sema_list": sema,
+            "ps_list": ps,
+        }
+        body = json.dumps(bundle).encode()
 
-    extra: dict[str, Any] = {"ContentType": _JSON_MIME}
-    if deps.kms_key_id:
-        extra["ServerSideEncryption"] = "aws:kms"
-        extra["SSEKMSKeyId"] = deps.kms_key_id
-    deps.s3.put_object(Bucket=deps.bucket, Key=deps.key, Body=body, **extra)
+        extra: dict[str, Any] = {"ContentType": _JSON_MIME}
+        if deps.kms_key_id:
+            extra["ServerSideEncryption"] = "aws:kms"
+            extra["SSEKMSKeyId"] = deps.kms_key_id
+        deps.s3.put_object(Bucket=deps.bucket, Key=deps.key, Body=body, **extra)
 
-    logger.info(
-        "sanctions bundle refreshed",
-        extra={"extra_fields": {"bucket": deps.bucket, "key": deps.key, **counts}},
-    )
-    return {"bucket": deps.bucket, "key": deps.key, "counts": counts}
+        logger.info(
+            "sanctions bundle refreshed",
+            extra={"extra_fields": {"bucket": deps.bucket, "key": deps.key, **counts}},
+        )
+        return {"bucket": deps.bucket, "key": deps.key, "counts": counts}
+    except Exception as exc:
+        logger.exception("sanctions refresh run failed before completion")
+        try:
+            deps.notify_failure(str(exc), counts)
+        except Exception:  # noqa: BLE001 - never let the alert itself mask the real failure
+            logger.exception("notify_failure itself failed")
+        raise
