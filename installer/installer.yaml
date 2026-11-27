@@ -13,7 +13,7 @@ Metadata:
         Parameters: [AphroditeVersion, BundleSha256]
       - Label:
           default: Deployment
-        Parameters: [Environment, SamlMetadataUrl, DeleteData]
+        Parameters: [Environment, SamlMetadataUrl, CompanyName, AdminEmail, DeleteData]
 
 Parameters:
   AphroditeVersion:
@@ -39,6 +39,20 @@ Parameters:
     Type: String
     Default: ""
     Description: Optional Entra ID SAML metadata URL that enables single sign-on.
+  CompanyName:
+    Type: String
+    Default: ""
+    Description: >-
+      The buyer's company name, pre-filled from the Marketplace subscribe flow.
+      Seeds the deployment's organization display name (editable later in the
+      Deployment Config tab).
+  AdminEmail:
+    Type: String
+    Default: ""
+    Description: >-
+      The buyer's admin contact email, pre-filled from the Marketplace subscribe
+      flow. Seeds the deployment's admin-email business-config field (editable
+      later in the Deployment Config tab).
   DeleteData:
     Type: String
     Default: "false"
@@ -445,6 +459,8 @@ Resources:
       BundleSha256: !Ref BundleSha256
       Environment: !Ref Environment
       SamlMetadataUrl: !Ref SamlMetadataUrl
+      CompanyName: !Ref CompanyName
+      AdminEmail: !Ref AdminEmail
       DeleteData: !Ref DeleteData
 
 Outputs:

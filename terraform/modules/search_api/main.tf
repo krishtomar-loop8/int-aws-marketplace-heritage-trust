@@ -435,6 +435,7 @@ resource "aws_lambda_function" "search" {
       APHRODITE_AML_EXPORT_FUNCTION          = var.aml_export_function_name
       APHRODITE_AML_SCHEDULE_NAME            = var.aml_schedule_name
       APHRODITE_ORG_NAME                     = var.org_name
+      APHRODITE_ADMIN_EMAIL                  = var.admin_email
       APHRODITE_ORG_OFFICE_ADDRESS           = var.org_office_address
       APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS  = jsonencode(var.excluded_sharepoint_folders)
       APHRODITE_QUICKBOOKS_REDIRECT_URI      = "${aws_apigatewayv2_api.search.api_endpoint}/connectors/quickbooks/callback"
@@ -497,6 +498,7 @@ resource "aws_lambda_function" "ab_runner" {
       APHRODITE_OUTPUTS_BUCKET              = var.outputs_bucket
       APHRODITE_OUTPUTS_KMS_KEY_ID          = var.kms_key_arn
       APHRODITE_ORG_NAME                    = var.org_name
+      APHRODITE_ADMIN_EMAIL                 = var.admin_email
       APHRODITE_ORG_OFFICE_ADDRESS          = var.org_office_address
       APHRODITE_EXCLUDED_SHAREPOINT_FOLDERS = jsonencode(var.excluded_sharepoint_folders)
     }

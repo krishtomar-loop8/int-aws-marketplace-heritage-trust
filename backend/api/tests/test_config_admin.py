@@ -101,3 +101,16 @@ def test_put_config_rejects_a_blank_org_identity_field(name, blank):
     with pytest.raises(ConfigValidationError, match=f"^{name}: must not be blank$"):
         put_config(client, {name: blank})
     assert get_config(client)[name]["source"] == "default"
+
+
+def test_admin_email_defaults_from_env_var(monkeypatch):
+    monkeypatch.setenv("APHRODITE_ADMIN_EMAIL", "ops@example.com")
+    client = ConfigClient(client=_FakeSsm())
+    fields = get_config(client)
+    assert fields["admin_email"] == {"value": "ops@example.com", "source": "default"}
+
+
+def test_admin_email_can_be_blank_unlike_org_name():
+    client = ConfigClient(client=_FakeSsm())
+    put_config(client, {"admin_email": ""})  # must not raise
+    assert get_config(client)["admin_email"] == {"value": "", "source": "configured"}

@@ -1,0 +1,87 @@
+name: loop8-landing-mirror-installer
+
+# Mirrors each published release's installer.yaml into Loop8's
+# installer-mirror S3 bucket (loop8-landing/terraform/api.tf's
+# aws_s3_bucket.installer_mirror) so the Marketplace landing page's launch
+# link can fetch it anonymously over plain HTTPS - CloudFormation's
+# quick-create console fetches templateURL without AWS credentials, so the
+# object must be public (installer_mirror's bucket policy only allows GET
+# under the installer/ prefix).
+#
+# Key convention below (installer/<version>/installer.yaml and
+# installer/latest/installer.yaml) matches what loop8-landing/backend/handler.py's
+# INSTALLER_TEMPLATE_URL / TEMPLATE_URL default already assumes, and what
+# loop8-landing/terraform/api.tf's Lambda environment block points the real
+# env var at - confirmed to already agree on both sides; nothing to reconcile.
+#
+# Requires GitHub Environment `loop8-landing` with vars:
+#   AWS_DEPLOY_ROLE_ARN      - Task 1 bootstrap's DeployRoleArn output
+#   AWS_REGION               - region for the OIDC credential exchange
+#   INSTALLER_MIRROR_BUCKET  - Task 2's installer_mirror_bucket Terraform
+#                              output (bucket name embeds Loop8's account id,
+#                              so it can't be hardcoded here)
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  mirror:
+    name: mirror
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: loop8-landing
+    steps:
+      - name: Resolve release tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # release.yml only creates a GitHub Release on an actual tag push;
+          # its workflow_dispatch path (dry_run) uploads workflow artifacts
+          # instead and never creates a release to mirror, so skip those runs.
+          if [ "${{ github.event.workflow_run.event }}" != "push" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          TAG="${{ github.event.workflow_run.head_branch }}"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials (OIDC)
+        if: steps.tag.outputs.skip == 'false'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-loop8-landing-mirror-${{ github.run_id }}
+
+      - name: Download installer.yaml from the release
+        if: steps.tag.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/installer"
+          gh release download "${{ steps.tag.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --dir "$RUNNER_TEMP/installer" --clobber \
+            -p installer.yaml
+
+      - name: Mirror to S3
+        if: steps.tag.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.tag.outputs.version }}"
+          BUCKET="${{ vars.INSTALLER_MIRROR_BUCKET }}"
+          aws s3 cp --only-show-errors "$RUNNER_TEMP/installer/installer.yaml" \
+            "s3://$BUCKET/installer/$VERSION/installer.yaml"
+          aws s3 cp --only-show-errors "$RUNNER_TEMP/installer/installer.yaml" \
+            "s3://$BUCKET/installer/latest/installer.yaml"

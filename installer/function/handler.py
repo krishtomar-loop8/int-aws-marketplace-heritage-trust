@@ -286,6 +286,8 @@ def _on_custom_resource(event: dict) -> None:
         "TF_VAR_aws_region": region,
         "TF_VAR_environment": src.get("Environment", ""),
         "TF_VAR_saml_metadata_url": src.get("SamlMetadataUrl", ""),
+        "TF_VAR_org_name": src.get("CompanyName", ""),
+        "TF_VAR_admin_email": src.get("AdminEmail", ""),
         "CFN_RESPONSE_URL": event["ResponseURL"],
         "CFN_STACK_ID": stack_id,
         "CFN_REQUEST_ID": event["RequestId"],

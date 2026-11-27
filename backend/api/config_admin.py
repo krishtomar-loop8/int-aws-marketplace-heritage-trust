@@ -1,6 +1,6 @@
 """Deployment business-config field schema + ``GET``/``PUT`` business logic.
 
-The 13 fields mirror the existing Terraform variables 1:1 (see
+The 14 fields mirror the existing Terraform variables 1:1 (see
 ``terraform/variables.tf``) — this module doesn't replace them, it adds a
 runtime layer in front: a value stored via :class:`services.config.ConfigClient`
 wins; otherwise the Terraform-set env var (or, failing that, the in-code
@@ -51,6 +51,7 @@ class _Field:
 
 _FIELDS: tuple[_Field, ...] = (
     _Field("org_name", str, "APHRODITE_ORG_NAME", "Aphrodite"),
+    _Field("admin_email", str, "APHRODITE_ADMIN_EMAIL", ""),
     _Field(
         "org_office_address",
         str,
@@ -167,7 +168,7 @@ def _env_default(field: _Field) -> Any:
 def get_config(config: ConfigClient | None) -> dict[str, dict[str, Any]]:
     """Return the ``GET /config`` response body's ``"fields"`` value.
 
-    For each of the 13 fields: if it's a key in the stored config, report its
+    For each of the 14 fields: if it's a key in the stored config, report its
     stored value with ``"source": "configured"``; otherwise report the env
     var (or in-code default) with ``"source": "default"``. Re-reads the store
     (``refresh=True``): a ``PUT /config`` only updates the cache of the
