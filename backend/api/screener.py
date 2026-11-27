@@ -53,6 +53,8 @@ _SOURCE_LABELS = (
     ("ps_list", "Public Safety Canada"),
 )
 
+_STALE_BUNDLE_DAYS = 45  # monthly refresh cadence (~30 days) + a 2-week grace window
+
 
 class ScreenerError(Exception):
     """Bad screening input (unsupported/empty file, or matches still pending)."""
@@ -73,6 +75,7 @@ class ScreenerService:
     prefix: str = "screener"
     kms_key_id: str | None = None
     matcher: Any = None  # built lazily on first screen (or injected in tests)
+    bundle_generated_at: str | None = None
 
     # -- screening ----------------------------------------------------------
 
@@ -92,6 +95,8 @@ class ScreenerService:
                 **build_summary(total, flagged),
                 "file_hash": hashlib.sha256(content).hexdigest(),
                 "flagged_results": flagged,
+                "bundle_generated_at": self.bundle_generated_at,
+                "bundle_stale": _is_bundle_stale(self.bundle_generated_at, now=datetime.now(UTC)),
             }
         except ValueError as exc:  # unrecognised format / no names
             raise ScreenerError(str(exc)) from exc
@@ -194,6 +199,7 @@ class ScreenerService:
             from backend.screener.matcher import SanctionMatcher
 
             bundle = self._load_bundle()
+            self.bundle_generated_at = bundle.get("generated_at")
             self.matcher = SanctionMatcher(sanctions_data=_entries_from_bundle(bundle))
             logger.info(
                 "sanctions matcher built",
@@ -262,6 +268,22 @@ class ScreenerService:
                 "skipping unreadable screener manifest", extra={"extra_fields": {"key": key}}
             )
             return None
+
+
+def _is_bundle_stale(
+    generated_at: str | None, *, now: datetime, threshold_days: int = _STALE_BUNDLE_DAYS
+) -> bool:
+    """True when the bundle is older than threshold_days, or its age is unknown
+    (a missing/unparsable generated_at) — unknown age is treated as stale, not fresh."""
+    if not generated_at:
+        return True
+    try:
+        generated = datetime.fromisoformat(generated_at)
+    except ValueError:
+        return True
+    if generated.tzinfo is None:
+        generated = generated.replace(tzinfo=UTC)
+    return (now - generated).days > threshold_days
 
 
 def _entries_from_bundle(bundle: dict[str, Any]) -> list[dict[str, Any]]:
