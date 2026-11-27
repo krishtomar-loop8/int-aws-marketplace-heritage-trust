@@ -60,17 +60,19 @@ class FakeStorage:
         return set()
 
 
-def _install(monkeypatch, estateably, clio, storage, config=None):
+def _install(monkeypatch, estateably, clio, storage, config=None, notify_failure=None):
     notifications: list[tuple[dict[str, str], dict[str, Any]]] = []
+    failures: list[tuple[str, str]] = []
     deps = Deps(
         estateably=estateably,
         clio=clio,
         storage=storage,
         notify=lambda keys, result: notifications.append((keys, result)),
+        notify_failure=notify_failure or (lambda context, error: failures.append((context, error))),
         config=config,
     )
     monkeypatch.setattr(H, "_DEPS", deps)
-    return notifications
+    return notifications, failures
 
 
 def _estate_with_intake(es, eid, title, first, last, number=None):
@@ -86,7 +88,7 @@ def test_handler_writes_workbook_and_notifies(monkeypatch):
     _estate_with_intake(es, "E1", "Estate of Margaret Whitfield - 190101", "Margaret", "Whitfield")
     _estate_with_intake(es, "E2", "Jane Doe Family Trust - 200002", "Jane", "Doe")
     storage = FakeStorage()
-    notifications = _install(monkeypatch, es, FakeClio(), storage)
+    notifications, _ = _install(monkeypatch, es, FakeClio(), storage)
 
     result = H.handler({})
 
@@ -101,7 +103,7 @@ def test_handler_writes_workbook_and_notifies(monkeypatch):
 
 def test_handler_writes_when_no_active_estates(monkeypatch):
     storage = FakeStorage()
-    notifications = _install(monkeypatch, FakeEstateably(), FakeClio(), storage)
+    notifications, _ = _install(monkeypatch, FakeEstateably(), FakeClio(), storage)
 
     H.handler({})
 
@@ -192,3 +194,38 @@ def test_warm_container_picks_up_a_config_change_between_invocations(monkeypatch
     ConfigClient(client=ssm).put({"own_company_names": ["John Roe"]})  # another container
     H.handler({})
     assert storage.puts[1]["result"]["parties"] == []
+
+
+def test_handler_calls_notify_failure_when_load_prior_matter_numbers_raises(monkeypatch):
+    class FailingStorage(FakeStorage):
+        def load_prior_matter_numbers(self, now):
+            raise RuntimeError("S3 listing failed")
+
+    notifications, failures = _install(monkeypatch, FakeEstateably(), FakeClio(), FailingStorage())
+
+    with pytest.raises(RuntimeError, match="S3 listing failed"):
+        H.handler({})
+
+    assert notifications == []
+    assert len(failures) == 1
+    assert "S3 listing failed" in failures[0][1]
+
+
+def test_notify_failure_raising_does_not_mask_the_original_exception(monkeypatch):
+    class FailingStorage(FakeStorage):
+        def load_prior_matter_numbers(self, now):
+            raise RuntimeError("original failure")
+
+    def failing_notify_failure(context, error):
+        raise RuntimeError("sns down")
+
+    _install(
+        monkeypatch,
+        FakeEstateably(),
+        FakeClio(),
+        FailingStorage(),
+        notify_failure=failing_notify_failure,
+    )
+
+    with pytest.raises(RuntimeError, match="original failure"):
+        H.handler({})

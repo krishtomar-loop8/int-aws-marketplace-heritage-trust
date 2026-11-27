@@ -82,6 +82,7 @@ class Deps:
     clio: Any
     storage: AmlExportStorage
     notify: Callable[[dict[str, str], dict[str, Any]], None]
+    notify_failure: Callable[[str, str], None]
     designations_bucket: str | None = None
     designations_key: str | None = None
     config: ConfigClient | None = None
@@ -128,11 +129,21 @@ def _build_deps() -> Deps:
             ),
         )
 
+    def notify_failure(context: str, error: str) -> None:
+        if not sns:
+            return
+        sns.publish(
+            TopicArn=topic_arn,
+            Subject=f"AML export run failed — {context}",
+            Message=f"The monthly AML name export failed before completing.\n\n{context}: {error}",
+        )
+
     return Deps(
         estateably=estateably,
         clio=clio,
         storage=storage,
         notify=notify,
+        notify_failure=notify_failure,
         designations_bucket=os.environ.get("APHRODITE_REFERENCE_BUCKET"),
         designations_key=os.environ.get("APHRODITE_AML_DESIGNATIONS_KEY"),
         config=config,
@@ -149,37 +160,49 @@ def _get_deps() -> Deps:
 def handler(event: dict[str, Any] | None = None, context: Any = None) -> dict[str, Any]:
     del event, context
     deps = _get_deps()
-    # Resolved per invocation, not in the cached _build_deps(): an on-demand
-    # re-run on a warm container must see a config change saved in between.
-    quality.configure(_org_config_from_env(deps.config))
+    try:
+        # Resolved per invocation, not in the cached _build_deps(): an on-demand
+        # re-run on a warm container must see a config change saved in between.
+        quality.configure(_org_config_from_env(deps.config))
 
-    now = datetime.now(UTC)
-    designations = load_designations(
-        deps.storage.s3, deps.designations_bucket, deps.designations_key
-    )
-    prior_matter_numbers = deps.storage.load_prior_matter_numbers(now)
+        now = datetime.now(UTC)
+        designations = load_designations(
+            deps.storage.s3, deps.designations_bucket, deps.designations_key
+        )
+        prior_matter_numbers = deps.storage.load_prior_matter_numbers(now)
 
-    result = run_export(
-        deps.estateably,
-        deps.clio,
-        designations=designations,
-        prior_matter_numbers=prior_matter_numbers,
-    )
-    workbook_bytes = build_workbook_bytes(result)
+        result = run_export(
+            deps.estateably,
+            deps.clio,
+            designations=designations,
+            prior_matter_numbers=prior_matter_numbers,
+        )
+        workbook_bytes = build_workbook_bytes(result)
 
-    keys = deps.storage.put_export(workbook_bytes, result, now=now)
+        keys = deps.storage.put_export(workbook_bytes, result, now=now)
 
-    logger.info(
-        "AML export written to S3",
-        extra={
-            "extra_fields": {
-                "bucket": deps.storage.bucket,
-                "key": keys["workbook"],
-                "parties": len(result["parties"]),
-                "excluded": len(result["excluded"]),
-                "exceptions": len(result["exceptions"]),
-            }
-        },
-    )
-    deps.notify(keys, result)
-    return {"bucket": deps.storage.bucket, "key": keys["workbook"], "manifest": keys["manifest"]}
+        logger.info(
+            "AML export written to S3",
+            extra={
+                "extra_fields": {
+                    "bucket": deps.storage.bucket,
+                    "key": keys["workbook"],
+                    "parties": len(result["parties"]),
+                    "excluded": len(result["excluded"]),
+                    "exceptions": len(result["exceptions"]),
+                }
+            },
+        )
+        deps.notify(keys, result)
+        return {
+            "bucket": deps.storage.bucket,
+            "key": keys["workbook"],
+            "manifest": keys["manifest"],
+        }
+    except Exception as exc:
+        logger.exception("AML export run failed before completion")
+        try:
+            deps.notify_failure("AML export run", str(exc))
+        except Exception:  # noqa: BLE001 - never let the alert itself mask the real failure
+            logger.exception("notify_failure itself failed")
+        raise
