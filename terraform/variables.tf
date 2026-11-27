@@ -107,6 +107,12 @@ variable "aml_export_notify_emails" {
   description = "Internal staff emails to notify when the monthly AML export is ready for review."
 }
 
+variable "sanctions_refresh_notify_emails" {
+  type        = list(string)
+  default     = []
+  description = "Internal staff emails to notify when the monthly sanctions refresh fails."
+}
+
 variable "aml_export_schedule_enabled" {
   type        = bool
   default     = false

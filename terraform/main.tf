@@ -228,6 +228,7 @@ module "sanctions_refresh" {
   reference_bucket_arn = module.reference_bucket.bucket_arn
   kms_key_arn          = module.kms.secrets_key_arn
   schedule_enabled     = var.sanctions_refresh_schedule_enabled
+  notify_emails        = var.sanctions_refresh_notify_emails
 }
 
 # Phase 2 added `count` to these three modules (previously unconditional). For
