@@ -186,6 +186,17 @@ export function ScreenerPanel({
 
       {result && (
         <>
+          {result.bundle_stale && (
+            <p className="banner banner-warn">
+              This screening ran against a sanctions watchlist bundle
+              {result.bundle_generated_at
+                ? ` generated ${shortDateTime(result.bundle_generated_at)}`
+                : " of unknown age"}
+              , which may be out of date. The result below is not blocked, but confirm the monthly
+              refresh is running if this keeps happening.
+            </p>
+          )}
+
           <div className="screen-summary">
             <Stat label="Names screened" value={result.total_screened} />
             <Stat label="Cleared" value={result.clear_count} />

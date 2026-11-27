@@ -197,6 +197,8 @@ export interface ScreenResult {
   clear_count: number;
   file_hash: string;
   flagged_results: FlaggedMatch[];
+  bundle_generated_at?: string | null;
+  bundle_stale?: boolean;
 }
 
 // A stored Certificate of Search (mirrors the PII-free manifest the backend
